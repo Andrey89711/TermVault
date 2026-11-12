@@ -1,0 +1,37 @@
+[package]
+name = "termvault"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "A local, terminal-first KDBX password vault (experimental MVP)"
+license = "MIT"
+repository = "https://github.com/Andrey89711/TermVault"
+readme = "README.md"
+default-run = "tvault"
+
+[[bin]]
+name = "tvault"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+argon2 = { package = "rust-argon2", version = "3" }
+arboard = { version = "3.6", default-features = false }
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
+dirs = "6"
+getrandom = "0.3"
+keepass = { version = "=0.17.0", features = ["save_kdbx4"] }
+ratatui = "0.29"
+tempfile = "3"
+zeroize = { version = "1.8", features = ["derive"] }
+
+[dev-dependencies]
+portable-pty = "0.9"
+vt100 = "0.15"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

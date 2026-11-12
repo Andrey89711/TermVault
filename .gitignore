@@ -1,0 +1,12 @@
+/target/
+*.kdbx
+*.kdb
+*.keyx
+*.key
+*.pem
+*.pfx
+*.log
+.env
+.env.*
+.DS_Store
+Thumbs.db

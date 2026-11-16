@@ -14,6 +14,7 @@ New-Item -ItemType Directory -Path $root | Out-Null
 try {
     $install = Join-Path $root 'installed'
     $binary = Install-TermVaultPayload -SourceRoot $repo -BinaryPath $BinaryPath -Destination $install
+    $install = Split-Path $binary -Parent
     $path = 'C:\Other;' + $install + ';%SystemRoot%\System32'
     if ((Get-TermVaultUpdatedPath -CurrentPath $path -InstallDirectory $install -Remove) -cne 'C:\Other;%SystemRoot%\System32') { throw 'PATH removal changed unrelated entries.' }
     if ((Get-TermVaultUpdatedPath -CurrentPath 'C:\Other' -InstallDirectory $install -Remove) -cne 'C:\Other') { throw 'Absent PATH entry was not a no-op.' }

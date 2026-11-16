@@ -10,6 +10,7 @@ New-Item -ItemType Directory -Path $root | Out-Null
 try {
     $destination = Join-Path $root 'installed'
     $binary = Install-TermVaultPayload -SourceRoot $repo -BinaryPath $BinaryPath -Destination $destination
+    $destination = Split-Path $binary -Parent
     if (!(Test-Path -LiteralPath $binary)) { throw 'Missing installed executable.' }
     if (!(Test-Path -LiteralPath (Join-Path $destination 'browser/extension/options.html'))) { throw 'Missing extension diagnostics.' }
     $dummyVault = Join-Path $destination 'preserve.kdbx'
@@ -17,7 +18,7 @@ try {
     $before = (Get-FileHash -LiteralPath $dummyVault).Hash
     $existingPath = 'C:\Other;%SystemRoot%\System32;C:\Tools;'
     $updatedPath = Get-TermVaultUpdatedPath -CurrentPath $existingPath -InstallDirectory $destination
-    if ($updatedPath -cne "$destination;$existingPath") { throw 'PATH update did not preserve existing raw entries.' }
+    if ($updatedPath -cne "$destination;$existingPath") { throw "PATH update did not preserve raw entries: expected [$destination;$existingPath], got [$updatedPath]." }
     $duplicates = "$existingPath;`"$($destination.ToUpperInvariant())\`";$destination"
     if ((Get-TermVaultUpdatedPath -CurrentPath $duplicates -InstallDirectory $destination) -cne "$destination;$existingPath") { throw 'PATH deduplication changed unrelated entries.' }
     if ((Get-TermVaultUpdatedPath -CurrentPath $updatedPath -InstallDirectory $destination) -cne $updatedPath) { throw 'PATH update is not idempotent.' }

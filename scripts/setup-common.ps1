@@ -8,6 +8,11 @@ function Get-TermVaultUpdatedPath {
     if ($CurrentPath) {
         foreach ($entry in ($CurrentPath -split ';')) {
             $normalized = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"')).TrimEnd('\', '/')
+            if ([IO.Path]::IsPathRooted($normalized)) {
+                # Windows TEMP/PATH may contain 8.3 aliases such as RUNNER~1.
+                # Canonicalize for comparison only; never rewrite unrelated raw entries.
+                try { $normalized = [IO.Path]::GetFullPath($normalized).TrimEnd('\', '/') } catch { }
+            }
             if ($normalized -ine $directory) { $remaining += $entry }
         }
     }

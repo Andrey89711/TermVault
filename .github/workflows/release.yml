@@ -44,6 +44,8 @@ jobs:
     name: Windows x64 package
     needs: checks
     runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +56,8 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Verify standalone Windows executable
+        run: python scripts/check-windows-binary.py target/x86_64-pc-windows-msvc/release/tvault.exe
       - name: Package allowlisted files and verify archive
         shell: pwsh
         run: ./scripts/package-windows.ps1 -BinaryPath target/x86_64-pc-windows-msvc/release/tvault.exe

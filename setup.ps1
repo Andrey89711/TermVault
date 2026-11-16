@@ -7,12 +7,14 @@ param(
     [switch]$Build,
     [switch]$CreateVault,
     [switch]$SkipBrowser,
+    [switch]$SkipShellIntegration,
     [switch]$NonInteractive
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:OS -ne 'Windows_NT') { throw 'This setup currently supports Windows only.' }
 . (Join-Path $PSScriptRoot 'scripts/setup-common.ps1')
+. (Join-Path $PSScriptRoot 'scripts/uninstall-common.ps1')
 Write-Host 'TermVault setup - experimental, unaudited. Keep independent encrypted backups.'
 $binary = Join-Path $PSScriptRoot 'tvault.exe'
 if ($Build -or !(Test-Path -LiteralPath $binary -PathType Leaf)) {
@@ -36,7 +38,7 @@ if ($Build -or !(Test-Path -LiteralPath $binary -PathType Leaf)) {
     }
 }
 if (!$Vault) {
-    $Vault = Join-Path $env:LOCALAPPDATA 'TermVault\vault.kdbx'
+    $Vault = Get-TermVaultDefaultVault
     if (!$NonInteractive) {
         $entered = Read-Host "Vault path (Enter for $Vault)"
         if ($entered) { $Vault = $entered }
@@ -59,7 +61,9 @@ if (!$SkipBrowser -and !$Browser) {
     $choice = Read-Host 'Browser: 1 Yandex (default), 2 Chrome, 3 Edge'
     $Browser = switch ($choice) { '2' { 'Chrome' }; '3' { 'Edge' }; '' { 'Yandex' }; '1' { 'Yandex' }; default { throw 'Unknown browser choice.' } }
 }
+if (!$SkipShellIntegration) { Write-Host 'Setup will update your user PATH and remember the selected default vault (no administrator rights needed).' }
 if (!$NonInteractive -and (Read-Host "Install/update program files in $InstallDirectory ? [y/N]") -ne 'y') { throw 'Setup cancelled.' }
+if (!$SkipShellIntegration) { $null = Get-TermVaultUpdatedPath -CurrentPath '' -InstallDirectory $InstallDirectory }
 $installed = Install-TermVaultPayload -SourceRoot $PSScriptRoot -BinaryPath $binary -Destination $InstallDirectory
 $installedRoot = Split-Path $installed -Parent
 if ($CreateVault) {
@@ -67,6 +71,12 @@ if ($CreateVault) {
     Write-Host 'Enter the master passphrase ONLY in TermVault. The setup script does not read it.'
     & $installed --create $Vault
     if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $Vault -PathType Leaf)) { throw 'Vault creation cancelled or failed. Program files remain installed; run setup again to continue.' }
+}
+if (!$SkipShellIntegration) {
+    Set-TermVaultDefaultVault -Vault $Vault
+    Set-TermVaultUserPath -InstallDirectory $installedRoot
+    Register-TermVaultUninstaller -InstallDirectory $installedRoot
+    Write-Host 'Added TermVault to user PATH and saved the default vault. Existing PATH entries were preserved.'
 }
 if (!$SkipBrowser) {
     $extensionDirectory = Join-Path $installedRoot 'browser\extension'
@@ -85,5 +95,7 @@ if (!$SkipBrowser) {
         Write-Host 'Open extension Details -> Extension options -> Check connection (no master password needed).'
     } else { Write-Host 'Browser registration skipped. Re-run setup when you have the extension ID.' }
 }
-Write-Host "Ready. Run: & '$installed' '$Vault'"
+if ($SkipShellIntegration) { Write-Host "Ready. Run: & '$installed' '$Vault'" }
+else { Write-Host 'Ready. Open a NEW terminal and run: tvault' }
+Write-Host 'To uninstall: Windows Settings -> Apps -> TermVault, or uninstall.cmd in the installed folder. Vaults and backups are kept.'
 Write-Host 'Updating/removing program files must not delete vaults or encrypted backups.'

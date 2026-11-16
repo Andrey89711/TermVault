@@ -18,6 +18,7 @@ white text, ordinary KeePass KDBX4 storage. Command: **`tvault`**.
 - No server, account, cloud, automatic URL opening, or arbitrary command execution.
 - Optional private Windows browser extension: click-to-fill with local unlock and explicit approval.
   See [browser setup (Russian)](browser/README.md). Experimental; test credentials first.
+  Store submission preparation: [publishing checklist](docs/STORE-PUBLISHING.ru.md).
 
 TermVault is independent of OpenTerminal and TerminalNote. It can run in a compatible
 terminal such as Windows Terminal or OpenTerminal. It does not modify shell profiles.
@@ -26,6 +27,11 @@ terminal such as Windows Terminal or OpenTerminal. It does not modify shell prof
 
 Prebuilt Windows x64 packages can be published through the tag-based release pipeline.
 Run `setup.cmd` / `setup.ps1` from a release ZIP for guided per-user installation.
+Uninstall through Windows Settings → Apps → TermVault, or run `uninstall.cmd`
+in the installed directory. Vaults, backups and unrelated files are always retained.
+Setup adds the installed directory to the current user's PATH (without changing
+the system PATH) and saves the selected default vault. Open a new terminal and run
+`tvault`; no EXE path is needed. An explicit `tvault C:\Vaults\other.kdbx` overrides it.
 From a clone, `setup.ps1 -Build` uses the installed Rust toolchain; without Rust,
 the wizard points to releases instead of silently installing developer tools.
 See [CI/CD and releasing](docs/RELEASING.md) and the
@@ -52,8 +58,11 @@ cargo build --release --locked
 
 `--create` never overwrites an existing file. Parent folders are created only after
 you submit a valid, matching new master passphrase. Without `--create`, missing files
-are errors. Default location: the OS local-data directory, under `TermVault/vault.kdbx`
-(usually `%LOCALAPPDATA%\TermVault\vault.kdbx` on Windows).
+are errors. Without setup defaults, the vault lives in the OS local-data directory,
+under `TermVault/vault.kdbx` (usually `%LOCALAPPDATA%\TermVault\vault.kdbx` on Windows).
+Setup saves the chosen absolute vault path in `TermVault/settings.json` in that same
+local-data directory. This file contains no password or encryption key. An explicit
+CLI vault path always overrides the saved default.
 
 Install the command into your Cargo bin directory, if desired:
 

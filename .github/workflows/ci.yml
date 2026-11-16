@@ -19,6 +19,8 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,10 +33,17 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
       - run: cargo build --release --locked
+      - name: Verify standalone Windows executable
+        if: runner.os == 'Windows'
+        run: python scripts/check-windows-binary.py target/release/tvault.exe
       - name: Test Windows installation in an isolated directory
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-setup.ps1 -BinaryPath target/release/tvault.exe
+      - name: Test Windows uninstallation with isolated files and registry
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-uninstall.ps1 -BinaryPath target/release/tvault.exe
       - name: Smoke-test Windows release packaging
         if: runner.os == 'Windows'
         shell: pwsh
@@ -61,3 +70,5 @@ jobs:
         with:
           node-version: 24
       - run: node --test browser/tests/*.test.mjs
+      - name: Validate Chrome Web Store upload ZIP
+        run: python3 scripts/package-extension.py --output "$RUNNER_TEMP/termvault-extension"

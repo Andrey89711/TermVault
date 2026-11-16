@@ -2,6 +2,7 @@ mod app;
 mod browser;
 mod clipboard;
 mod input;
+mod settings;
 mod vault;
 
 use anyhow::{bail, Context, Result};
@@ -15,7 +16,7 @@ use std::{io::IsTerminal, path::PathBuf, time::Duration};
     about = "Local terminal password vault — experimental MVP, keep backups"
 )]
 struct Cli {
-    /// Existing vault path. Default: the OS local-data directory/TermVault/vault.kdbx
+    /// Existing vault path. Default: setup's selected vault, or local-data/TermVault/vault.kdbx
     path: Option<PathBuf>,
     /// Explicitly create a NEW vault (never overwrite an existing file)
     #[arg(long)]
@@ -31,9 +32,9 @@ struct Cli {
 fn path(cli: &Cli) -> Result<PathBuf> {
     let path = match &cli.path {
         Some(path) => path.clone(),
-        None => dirs::data_local_dir()
-            .context("Cannot locate the local-data directory")?
-            .join("TermVault/vault.kdbx"),
+        None => settings::default_vault(
+            &dirs::data_local_dir().context("Cannot locate the local-data directory")?,
+        )?,
     };
     let path = if let Ok(suffix) = path.strip_prefix("~") {
         dirs::home_dir()

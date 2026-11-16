@@ -7,8 +7,11 @@ and calls from the release workflow:
 
 - Rust formatting, Clippy, tests and release compilation on Windows and Linux.
 - Browser tests on Node.js 24, without npm dependencies.
+- Chrome Web Store ZIP validation (manifest at root, extension-only allowlist, icon dimensions).
 - Windows ZIP packaging smoke test with an explicit file allowlist.
 - Isolated Windows setup/update/repair tests without changing real browser registrations.
+- Isolated uninstall tests cover retained vaults/backups, locked EXEs, PATH removal,
+  the command launcher and bridge ownership using a dedicated temporary registry subtree.
 - On `main`, a `windows-preview` Actions artifact is retained for seven days.
   Preview artifacts are not published releases.
 
@@ -32,6 +35,8 @@ after the first successful run; workflows alone do not enforce branch protection
    Do not reuse or force-move an existing release tag.
 4. `.github/workflows/release.yml` verifies the tag matches both versions, reruns
    all checks and builds `x86_64-pc-windows-msvc` with `--locked`.
+   Windows CI and release builds use `-C target-feature=+crt-static`; the release
+   import-table check rejects external VC++ runtime DLL dependencies.
 5. The workflow verifies the ZIP file allowlist, uploads the ZIP and SHA-256,
    verifies the checksums again on the publishing runner, and creates a **draft**
    GitHub Release. Only this final job has `contents: write`.

@@ -1,13 +1,91 @@
 Set-StrictMode -Version Latest
 
+function Get-TermVaultUpdatedPath {
+    param([AllowNull()][AllowEmptyString()][string]$CurrentPath, [Parameter(Mandatory = $true)][string]$InstallDirectory, [switch]$Remove)
+    $directory = [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\', '/')
+    if ($directory.IndexOfAny([char[]]';"%') -ge 0) { throw 'Install path cannot contain semicolons, quotes or percent signs when adding to PATH.' }
+    $remaining = @()
+    if ($CurrentPath) {
+        foreach ($entry in ($CurrentPath -split ';')) {
+            $normalized = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"')).TrimEnd('\', '/')
+            if ($normalized -ine $directory) { $remaining += $entry }
+        }
+    }
+    # Only move/deduplicate our own directory. Preserve all other raw entries and their order.
+    if ($Remove) { return ($remaining -join ';') }
+    (@($directory) + $remaining) -join ';'
+}
+
+function Set-TermVaultUserPath {
+    param([Parameter(Mandatory = $true)][string]$InstallDirectory, [switch]$Remove)
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    $changed = $false
+    try {
+        $raw = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $updated = Get-TermVaultUpdatedPath -CurrentPath $raw -InstallDirectory $InstallDirectory -Remove:$Remove
+        if (($null -ne $raw -or !$Remove) -and $raw -cne $updated) {
+            $kind = if ($null -eq $raw) { [Microsoft.Win32.RegistryValueKind]::ExpandString } else { $key.GetValueKind('Path') }
+            if ($kind -notin @([Microsoft.Win32.RegistryValueKind]::String, [Microsoft.Win32.RegistryValueKind]::ExpandString)) { throw 'User PATH has an unsupported registry type; it was not modified.' }
+            $key.SetValue('Path', $updated, $kind)
+            $changed = $true
+        }
+    } finally { $key.Dispose() }
+    $env:Path = Get-TermVaultUpdatedPath -CurrentPath $env:Path -InstallDirectory $InstallDirectory -Remove:$Remove
+    if ($changed) {
+        if (!('TermVault.InstallerEnvironment' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace TermVault {
+    public static class InstallerEnvironment {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr wparam,
+            string lparam, uint flags, uint timeout, out UIntPtr result);
+    }
+}
+'@
+        }
+        $result = [UIntPtr]::Zero
+        [void][TermVault.InstallerEnvironment]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 3000, [ref]$result)
+    }
+}
+
+function Get-TermVaultDefaultVault {
+    param([string]$SettingsPath = (Join-Path $env:LOCALAPPDATA 'TermVault\settings.json'))
+    if (!(Test-Path -LiteralPath $SettingsPath)) { return (Join-Path $env:LOCALAPPDATA 'TermVault\vault.kdbx') }
+    $info = Get-Item -LiteralPath $SettingsPath
+    if ($info.PSIsContainer -or $info.Length -gt 8192 -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid TermVault settings file.' }
+    $settings = Get-Content -Raw -Encoding UTF8 -LiteralPath $SettingsPath | ConvertFrom-Json
+    if (@($settings.PSObject.Properties.Name).Count -ne 1 -or !$settings.vault -or ![IO.Path]::IsPathRooted($settings.vault) -or [IO.Path]::GetExtension($settings.vault) -ine '.kdbx') { throw 'Invalid TermVault default vault setting.' }
+    [string]$settings.vault
+}
+
+function Set-TermVaultDefaultVault {
+    param([Parameter(Mandatory = $true)][string]$Vault, [string]$SettingsPath = (Join-Path $env:LOCALAPPDATA 'TermVault\settings.json'))
+    if (![IO.Path]::IsPathRooted($Vault) -or [IO.Path]::GetExtension($Vault) -ine '.kdbx') { throw 'Default vault must be an absolute .kdbx path.' }
+    if (Test-Path -LiteralPath $SettingsPath) { $null = Get-TermVaultDefaultVault -SettingsPath $SettingsPath }
+    $parent = Split-Path $SettingsPath -Parent
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $temporary = Join-Path $parent ('.settings-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        [IO.File]::WriteAllText($temporary, (@{ vault = $Vault } | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $SettingsPath) { [IO.File]::Replace($temporary, $SettingsPath, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $SettingsPath) }
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary }
+    }
+}
+
 function Get-TermVaultPayloadFiles {
     @(
-        'LICENSE', 'README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/RELEASING.md',
-        'setup.ps1', 'setup.cmd', 'scripts/setup-common.ps1',
+        'LICENSE', 'README.md', 'SECURITY.md', 'PRIVACY.md', 'CHANGELOG.md', 'docs/RELEASING.md', 'docs/STORE-PUBLISHING.ru.md',
+        'setup.ps1', 'setup.cmd', 'uninstall.ps1', 'uninstall.cmd', 'scripts/setup-common.ps1', 'scripts/uninstall-common.ps1',
         'browser/README.md', 'browser/QUICKSTART.ru.md', 'browser/install.ps1', 'browser/uninstall.ps1',
         'browser/extension/manifest.json', 'browser/extension/background.js',
         'browser/extension/content.js', 'browser/extension/package.json',
-        'browser/extension/options.html', 'browser/extension/options.js'
+        'browser/extension/options.html', 'browser/extension/options.js',
+        'browser/extension/icons/icon-16.png', 'browser/extension/icons/icon-32.png',
+        'browser/extension/icons/icon-48.png', 'browser/extension/icons/icon-128.png'
     )
 }
 

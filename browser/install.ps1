@@ -50,6 +50,8 @@ $vendor = @{ Yandex = 'Chromium'; Chrome = 'Google\Chrome'; Edge = 'Microsoft\Ed
 $key = "HKCU:\Software\$vendor\NativeMessagingHosts\com.termvault.browser"
 New-Item -Path $key -Force | Out-Null
 Set-Item -Path $key -Value $manifestPath
+$owner = @{ install_directory = [IO.Path]::GetFullPath($repo).TrimEnd('\', '/') } | ConvertTo-Json
+[IO.File]::WriteAllText((Join-Path $directory '.termvault-owner.json'), $owner, $utf8)
 if ($Browser -eq 'Yandex') {
     $legacyKey = 'HKCU:\Software\Yandex\YandexBrowser\NativeMessagingHosts\com.termvault.browser'
     if ((Test-Path -LiteralPath $legacyKey) -and ((Get-Item -LiteralPath $legacyKey).GetValue('') -eq $manifestPath)) {

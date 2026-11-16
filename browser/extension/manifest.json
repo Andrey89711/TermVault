@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "TermVault — локальное заполнение",
+  "version": "0.1.0",
+  "description": "Заполняет логин и пароль по нажатию с подтверждением в локальном TermVault. Экспериментальная версия.",
+  "minimum_chrome_version": "106",
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "TermVault: заполнить с подтверждением" },
+  "incognito": "not_allowed",
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }
+}

@@ -15,7 +15,9 @@ white text, ordinary KeePass KDBX4 storage. Command: **`tvault`**.
 - Cryptographically random 24-character passwords from the OS random source.
 - Explicit password/username copy with best-effort conditional clipboard clearing.
 - Encrypted backups before every mutation, atomic file replacement, external-change checks.
-- No server, account, cloud, browser extension, automatic URL opening, or command execution.
+- No server, account, cloud, automatic URL opening, or arbitrary command execution.
+- Optional private Windows browser extension: click-to-fill with local unlock and explicit approval.
+  See [browser setup (Russian)](browser/README.md). Experimental; test credentials first.
 
 TermVault is independent of OpenTerminal and TerminalNote. It can run in a compatible
 terminal such as Windows Terminal or OpenTerminal. It does not modify shell profiles.
@@ -92,7 +94,8 @@ Manual lock/quit/back asks to save, discard, or cancel when an entry draft has c
 so save important edits before leaving the terminal. There is no draft recovery.
 
 There is no master-password recovery or backdoor. Master-password changes, keyfiles,
-TOTP, passkeys, groups management, attachments, and browser autofill are not implemented.
+TOTP, passkeys, groups management, and attachments are not implemented.
+Browser filling is an optional read-only Windows integration, not automatic background autofill.
 
 ## Storage and compatibility
 

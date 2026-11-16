@@ -25,6 +25,12 @@ keepass = { version = "=0.17.0", features = ["save_kdbx4"] }
 ratatui = "0.29"
 tempfile = "3"
 zeroize = { version = "1.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 portable-pty = "0.9"

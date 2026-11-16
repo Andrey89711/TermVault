@@ -22,6 +22,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
+    cell::Cell,
     io,
     path::PathBuf,
     time::{Duration, Instant},
@@ -45,6 +46,7 @@ enum Mode {
     Edit,
     Delete,
     Discard(Action),
+    BrowserConfirm,
 }
 
 struct Form {
@@ -98,6 +100,9 @@ struct App {
     lock_after: Duration,
     status: String,
     exit: bool,
+    browser_origin: Option<String>,
+    browser_credentials: Option<Zeroizing<crate::browser::Credentials>>,
+    browser_review_visible: Cell<bool>,
 }
 
 impl App {
@@ -121,6 +126,9 @@ impl App {
             lock_after,
             status: "Experimental MVP — use test data and keep encrypted backups.".into(),
             exit: false,
+            browser_origin: None,
+            browser_credentials: None,
+            browser_review_visible: Cell::new(false),
         }
     }
     fn unlock(&mut self) {
@@ -149,6 +157,9 @@ impl App {
                 self.last_activity = Instant::now();
                 self.refresh(None);
                 self.status=if readonly { "Foreign vault opened read-only. Editing is restricted to TermVault-created vaults." } else { "Unlocked — n new · Enter edit · g new generated password · Ctrl+L lock" }.into();
+                if self.browser_origin.is_some() {
+                    self.status = "Browser request: select a matching entry, Enter to review, y to approve. Esc cancels. No edits are allowed.".into();
+                }
             }
             Err(error) => self.status = error.to_string(),
         }
@@ -174,7 +185,15 @@ impl App {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, (_, title))| title.to_lowercase().contains(&query))
+            .filter(|(_, (id, title))| {
+                title.to_lowercase().contains(&query)
+                    && self.browser_origin.as_ref().is_none_or(|target| {
+                        self.session
+                            .as_ref()
+                            .and_then(|session| session.entry(*id))
+                            .is_some_and(|entry| crate::browser::matches(&entry.url, target))
+                    })
+            })
             .map(|(i, _)| i)
             .collect();
         self.selected = preferred
@@ -361,7 +380,43 @@ impl App {
             self.leave(Action::Lock);
             return;
         }
+        if self.browser_origin.is_some() {
+            match (self.mode, key.code) {
+                (_, KeyCode::Esc | KeyCode::Char('q')) => self.action(Action::Quit),
+                (Mode::Browse, KeyCode::Up) => self.selected = self.selected.saturating_sub(1),
+                (Mode::Browse, KeyCode::Down) => {
+                    self.selected = (self.selected + 1).min(self.visible.len().saturating_sub(1));
+                }
+                (Mode::Browse, KeyCode::Enter) if self.selected_id().is_some() => {
+                    self.mode = Mode::BrowserConfirm;
+                }
+                (Mode::BrowserConfirm, KeyCode::Char('y')) if self.browser_review_visible.get() => {
+                    if let Some(data) = self
+                        .selected_id()
+                        .and_then(|id| self.session.as_ref()?.entry(id))
+                    {
+                        let target = self.browser_origin.as_ref().unwrap();
+                        if crate::browser::matches(&data.url, target)
+                            && data.username.len() <= 1024
+                            && data.password.len() <= 1024
+                        {
+                            self.browser_credentials =
+                                Some(Zeroizing::new(crate::browser::Credentials {
+                                    origin: target.clone(),
+                                    username: data.username.to_string(),
+                                    password: data.password.to_string(),
+                                }));
+                            self.action(Action::Quit);
+                        }
+                    }
+                }
+                (Mode::BrowserConfirm, KeyCode::Char('n')) => self.mode = Mode::Browse,
+                _ => {}
+            }
+            return;
+        }
         match self.mode {
+            Mode::BrowserConfirm => {}
             Mode::Edit => {
                 if ctrl && letter == Some('s') {
                     self.save();
@@ -487,6 +542,7 @@ impl App {
         }
     }
     fn draw(&self, frame: &mut Frame) {
+        self.browser_review_visible.set(false);
         let area = frame.area();
         frame.render_widget(Block::default().style(base()), area);
         if area.width < 60 || area.height < 20 {
@@ -518,8 +574,14 @@ impl App {
             "LOCKED"
         };
         frame.render_widget(
-            Paragraph::new(format!(" ◆ TermVault  ·  {state}  ·  EXPERIMENTAL MVP"))
-                .style(base().add_modifier(Modifier::BOLD)),
+            Paragraph::new(format!(
+                " ◆ TermVault  ·  {state}  ·  EXPERIMENTAL MVP{}",
+                self.browser_origin
+                    .as_ref()
+                    .map(|origin| format!("\n BROWSER FILL → {}", input::display(origin)))
+                    .unwrap_or_default()
+            ))
+            .style(base().add_modifier(Modifier::BOLD)),
             rows[0],
         );
         if self.session.is_none() {
@@ -623,7 +685,11 @@ impl App {
                     input::display(&data.notes)
                 )
             } else {
-                "No entries.\n\nPress n to add a record, or g to start with a generated password.\nYour data is saved only when you press Ctrl+S.\n\nThis MVP is not audited. Use test credentials first.".into()
+                if self.browser_origin.is_some() {
+                    "No matching entries.\n\nSet an entry's URL in the normal TermVault editor to an HTTPS address with the exact same host and port. Subdomains are not shared automatically.\n\nEsc cancels.".into()
+                } else {
+                    "No entries.\n\nPress n to add a record, or g to start with a generated password.\nYour data is saved only when you press Ctrl+S.\n\nThis MVP is not audited. Use test credentials first.".into()
+                }
             };
             frame.render_widget(
                 Paragraph::new(text)
@@ -639,7 +705,9 @@ impl App {
             rows[2],
         );
         frame.render_widget(
-            Paragraph::new(if self.form.is_some() {
+            Paragraph::new(if self.browser_origin.is_some() {
+                " ↑↓ select · Enter review · y approve in confirmation · Esc cancel "
+            } else if self.form.is_some() {
                 " Tab field · Ctrl+S save · Ctrl+G generate · Ctrl+P reveal · Esc back "
             } else {
                 " ↑↓ select · Enter edit · n new · / search · c copy · p reveal · Ctrl+L lock "
@@ -648,6 +716,12 @@ impl App {
             rows[3],
         );
         match self.mode {
+            Mode::BrowserConfirm => {
+                let title = self.selected_id().and_then(|id| self.session.as_ref()?.entry(id))
+                    .map(|entry| input::display(&entry.title).replace('\n', " ").chars().take(80).collect::<String>()).unwrap_or_default();
+                self.browser_review_visible.set(true);
+                popup(frame, &format!("Send login and password for:\n{title}\nTo: {}\n\n[y] Approve once   [n] Back   [Esc] Cancel", self.browser_origin.as_deref().unwrap_or("")), " Confirm browser fill ", 18);
+            }
             Mode::Search=>popup(frame,&format!("{}\nEnter applies · Esc clears",self.query.rendered(false,true))," Filter entry titles ",5),
             Mode::Discard(_)=>popup(frame,"Unsaved changes\n\n[s] Save and continue   [d] Discard   [c/Esc] Cancel\nInactivity auto-lock discards unsaved drafts."," Unsaved entry ",7),
             Mode::Delete=>popup(frame,"Delete the selected entry?\n\n[d] Delete   [Esc] Cancel\nEncrypted backups retain previous versions; this is not secure erasure."," Confirm deletion ",7),
@@ -708,7 +782,22 @@ impl Drop for Guard {
 }
 
 pub fn run(path: PathBuf, creating: bool, lock_after: Duration) -> Result<()> {
-    let mut app = App::new(path, creating, lock_after);
+    run_app(App::new(path, creating, lock_after)).map(|_| ())
+}
+
+#[cfg(windows)]
+pub fn run_browser(
+    path: PathBuf,
+    origin: String,
+) -> Result<Option<Zeroizing<crate::browser::Credentials>>> {
+    let mut app = App::new(path, false, Duration::from_secs(120));
+    app.browser_origin = Some(origin);
+    app.status =
+        "Browser fill request. Check the destination above before unlocking. Esc cancels.".into();
+    run_app(app)
+}
+
+fn run_app(mut app: App) -> Result<Option<Zeroizing<crate::browser::Credentials>>> {
     enable_raw_mode()?;
     let _guard = Guard;
     execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
@@ -743,7 +832,7 @@ pub fn run(path: PathBuf, creating: bool, lock_after: Duration) -> Result<()> {
             terminal.draw(|frame| app.draw(frame))?;
         }
     }
-    Ok(())
+    Ok(app.browser_credentials.take())
 }
 
 #[cfg(test)]
@@ -855,5 +944,69 @@ mod tests {
         assert!(text.contains("Cancel"));
         app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert!(app.session.is_none());
+    }
+
+    #[test]
+    fn browser_release_requires_exact_origin_and_two_explicit_actions() {
+        let (_root, mut app) = app();
+        for (title, url) in [
+            ("Good", "https://example.com/login"),
+            ("Bad", "https://example.com.evil.org"),
+            ("Subdomain", "https://sub.example.com"),
+        ] {
+            app.session
+                .as_mut()
+                .unwrap()
+                .update(
+                    None,
+                    &EntryData {
+                        title: Zeroizing::new(title.into()),
+                        url: Zeroizing::new(url.into()),
+                        username: Zeroizing::new("test-user".into()),
+                        password: Zeroizing::new("dummy-secret".into()),
+                        ..EntryData::default()
+                    },
+                )
+                .unwrap();
+        }
+        let before = std::fs::read(&app.path).unwrap();
+        app.browser_origin = Some("https://example.com".into());
+        app.refresh(None);
+        assert_eq!(app.visible.len(), 1);
+        assert!(screen(&app).contains("Good"));
+        assert!(!screen(&app).contains("dummy-secret"));
+        for key in ['n', 'd', 'g', 'p', 'c', 'u', 'y'] {
+            app.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+        }
+        assert!(app.form.is_none());
+        assert!(app.reveal_until.is_none());
+        assert!(app.browser_credentials.is_none());
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::BrowserConfirm);
+        assert!(app.browser_credentials.is_none());
+        let mut small = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        small.draw(|frame| app.draw(frame)).unwrap();
+        app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.browser_credentials.is_none());
+        assert!(screen(&app).contains("https://example.com"));
+        app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let result = app.browser_credentials.as_ref().unwrap();
+        assert_eq!(result.password, "dummy-secret");
+        assert_eq!(result.origin, "https://example.com");
+        assert!(app.exit);
+        assert!(app.session.is_none());
+        assert_eq!(std::fs::read(&app.path).unwrap(), before);
+    }
+
+    #[test]
+    fn browser_cancel_and_auto_lock_release_nothing() {
+        let (_root, mut app) = app();
+        app.browser_origin = Some("https://example.com".into());
+        app.tick(app.last_activity + Duration::from_secs(121));
+        assert!(app.session.is_none());
+        assert!(app.browser_credentials.is_none());
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.exit);
+        assert!(app.browser_credentials.is_none());
     }
 }

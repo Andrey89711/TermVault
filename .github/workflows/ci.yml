@@ -1,9 +1,19 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   rust:
+    name: Rust (${{ matrix.os }})
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -11,6 +21,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -19,6 +31,32 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
       - run: cargo build --release --locked
+      - name: Test Windows installation in an isolated directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-setup.ps1 -BinaryPath target/release/tvault.exe
+      - name: Smoke-test Windows release packaging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -BinaryPath target/release/tvault.exe -OutputDirectory '${{ runner.temp }}/termvault-package'
+      - name: Upload Windows preview
+        if: runner.os == 'Windows' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-preview
+          path: |
+            ${{ runner.temp }}/termvault-package/*.zip
+            ${{ runner.temp }}/termvault-package/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+  browser:
+    name: Browser extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24

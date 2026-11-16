@@ -24,6 +24,13 @@ terminal such as Windows Terminal or OpenTerminal. It does not modify shell prof
 
 ## Build and run
 
+Prebuilt Windows x64 packages can be published through the tag-based release pipeline.
+Run `setup.cmd` / `setup.ps1` from a release ZIP for guided per-user installation.
+From a clone, `setup.ps1 -Build` uses the installed Rust toolchain; without Rust,
+the wizard points to releases instead of silently installing developer tools.
+See [CI/CD and releasing](docs/RELEASING.md) and the
+[Windows ZIP quickstart](browser/QUICKSTART.ru.md). Release drafts require manual approval.
+
 Requires stable Rust **1.89 or newer**. On Windows use the MSVC toolchain, Visual Studio
 C++ Build Tools, and the Windows SDK. No administrator permissions are needed.
 

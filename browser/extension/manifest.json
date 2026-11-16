@@ -8,5 +8,6 @@
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_title": "TermVault: заполнить с подтверждением" },
   "incognito": "not_allowed",
+  "options_ui": { "page": "options.html", "open_in_tab": true },
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }
 }

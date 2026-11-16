@@ -31,10 +31,10 @@ pub fn matches(entry_url: &str, target: &str) -> bool {
 
 #[cfg(any(windows, test))]
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    action: String,
-    url: String,
+#[serde(tag = "action", rename_all = "lowercase", deny_unknown_fields)]
+enum Request {
+    Fill { url: String },
+    Ping {},
 }
 
 #[derive(Serialize, Deserialize, Zeroize)]
@@ -111,10 +111,15 @@ fn native_request() -> Result<Zeroizing<Vec<u8>>> {
     }
     let bytes = read_message(&mut std::io::stdin().lock())?;
     let request: Request = serde_json::from_slice(&bytes)?;
-    if request.action != "fill" {
-        bail!("Unsupported request");
-    }
-    let target = origin(&request.url)?;
+    let target = match request {
+        Request::Ping {} => {
+            // Authenticate the caller first, but never inspect or unlock the vault for a ping.
+            return Ok(Zeroizing::new(serde_json::to_vec(&serde_json::json!({
+                "ok": true, "kind": "pong", "protocol": 1, "version": env!("CARGO_PKG_VERSION")
+            }))?));
+        }
+        Request::Fill { url } => origin(&url)?,
+    };
     crate::vault::inspect(&config.vault)?;
     // A fresh console handles master-password entry. The anonymous stdout pipe
     // carries only the explicitly approved record; never a password argument.
@@ -256,8 +261,18 @@ mod tests {
     fn rejects_extra_commands() {
         let request: Request =
             serde_json::from_str(r#"{"action":"fill","url":"https://example.com"}"#).unwrap();
-        assert_eq!(request.action, "fill");
-        assert_eq!(request.url, "https://example.com");
+        assert!(matches!(request, Request::Fill { url } if url == "https://example.com"));
+        assert!(matches!(
+            serde_json::from_str::<Request>(r#"{"action":"ping"}"#).unwrap(),
+            Request::Ping {}
+        ));
+        for invalid in [
+            r#"{"action":"ping","url":"https://example.com"}"#,
+            r#"{"action":"export"}"#,
+            r#"{"action":"fill"}"#,
+        ] {
+            assert!(serde_json::from_str::<Request>(invalid).is_err());
+        }
         assert!(serde_json::from_str::<Request>(
             r#"{"action":"fill","url":"https://example.com","password":"no"}"#
         )

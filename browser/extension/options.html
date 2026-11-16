@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Подключение TermVault</title></head>
+<body>
+  <h1>Подключение TermVault</h1>
+  <p>1. Запустите setup.ps1 из папки программы. Выберите браузер и хранилище.</p>
+  <p>2. Вставьте в мастер установки ID этого расширения:</p>
+  <p><code id="extension-id"></code></p>
+  <p>3. После завершения установки проверьте локальное соединение:</p>
+  <button id="check" type="button">Проверить подключение</button>
+  <p id="status" role="status" aria-live="polite">Проверка не открывает базу и не запрашивает мастер-пароль.</p>
+  <p>Успешная проверка подтверждает только связь с мостом, а не правильность мастер-пароля или работу формы сайта.</p>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

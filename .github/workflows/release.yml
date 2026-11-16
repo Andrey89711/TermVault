@@ -1,0 +1,99 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate version tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Match tag, Rust version and extension version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, tomllib
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
+              raise SystemExit('Use a stable version tag: vX.Y.Z')
+          version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
+          extension = json.loads(Path('browser/extension/manifest.json').read_text())['version']
+          if tag != f'v{version}' or extension != version:
+              raise SystemExit('Tag, Cargo.toml and extension manifest versions must match')
+          PY
+
+  checks:
+    name: Required checks
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    name: Windows x64 package
+    needs: checks
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Package allowlisted files and verify archive
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -BinaryPath target/x86_64-pc-windows-msvc/release/tvault.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Create draft GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: dist
+      - name: Verify uploaded checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS.txt
+      - name: Create draft release (never overwrite an existing release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          Experimental, unaudited password vault. Use test credentials first and keep independent encrypted backups.
+
+          Windows x64 ZIP includes tvault.exe, the private browser extension and setup instructions. No Rust installation is needed to use this package. Extension loading and bridge registration still require explicit user action.
+
+          Verify the ZIP against SHA256SUMS.txt before extracting. The executable is not code-signed; a checksum is not a security audit or a digital signature.
+          EOF
+          gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+            --draft --verify-tag --title "TermVault $RELEASE_TAG" \
+            --generate-notes --notes-file release-notes.md

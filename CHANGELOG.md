@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Guided per-user Windows setup from a release ZIP or source checkout, with permanent extension files.
+- Repeat installation/repair, protection of unrelated files and rejection of automatic downgrades.
+- Extension connection diagnostics via an authenticated ping that never opens the vault.
+- Tag-based draft releases with allowlisted Windows ZIPs, SHA-256 and isolated setup tests in CI.
+
 ## 0.1.0
 
 Experimental, unaudited terminal MVP:

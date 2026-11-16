@@ -10,6 +10,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $binary = Join-Path $repo 'target\browser-build\release\tvault.exe'
+if (Test-Path -LiteralPath (Join-Path $repo 'tvault.exe') -PathType Leaf) {
+    $binary = Join-Path $repo 'tvault.exe' # Prebuilt release ZIP; no Rust toolchain required.
+}
 if (!(Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Run cargo build --release --locked --target-dir target/browser-build first.' }
 $vaultPath = (Resolve-Path -LiteralPath $Vault).ProviderPath
 if ([IO.Path]::GetExtension($vaultPath) -ine '.kdbx') { throw 'Choose an existing .kdbx vault.' }

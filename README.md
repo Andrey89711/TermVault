@@ -39,7 +39,8 @@ credentials. Passwords remain masked in documentation screenshots.
 
 ## Build and run
 
-Prebuilt Windows x64 packages can be published through the tag-based release pipeline.
+The current release is [v0.1.1](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.1):
+download `termvault-0.1.1-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
 Run `setup.cmd` / `setup.ps1` from a release ZIP for guided per-user installation.
 Uninstall through Windows Settings → Apps → TermVault, or run `uninstall.cmd`
 in the installed directory. Vaults, backups and unrelated files are always retained.

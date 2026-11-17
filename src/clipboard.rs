@@ -71,6 +71,10 @@ impl Clipboard {
             owned: None,
         }
     }
+    #[cfg(test)]
+    pub(crate) fn owns_text_for_test(&self) -> bool {
+        self.owned.is_some()
+    }
     pub fn copy(&mut self, text: &str, now: Instant) -> Result<()> {
         if self.backend.is_none() {
             self.backend = arboard::Clipboard::new()

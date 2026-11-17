@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-11-17
+
+- Shared capability checks for keyboard and command-palette actions, including
+  read-only editing restrictions and unsaved-change confirmation for lock/quit.
+- Consolidated runtime teardown on lock and per-frame render feedback to revoke
+  stale mouse targets and confirmations after resizing or changing dialogs.
+- Audit regression tests for command availability/order, shortcut parity, complete
+  lock cleanup, visible browser approval and full vault-deletion warnings.
 
 - English-default TUI with persistent English/Russian selection through Ctrl+P →
   Language, preserving the existing `vault` setting in `settings.json`.

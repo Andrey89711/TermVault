@@ -29,14 +29,19 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    cell::{Cell, RefCell},
-    collections::HashSet,
     io,
     path::PathBuf,
-    sync::mpsc::{Receiver, TryRecvError},
+    sync::mpsc::TryRecvError,
     time::{Duration, Instant},
 };
 use zeroize::{Zeroize, Zeroizing};
+
+mod policy;
+mod render;
+mod runtime;
+use policy::Invocation;
+use render::{dim_backdrop, invert, panel, popup, wrap_plain_text, RenderFeedback};
+use runtime::RuntimeState;
 
 const NOTICE_TIME: Duration = Duration::from_secs(4);
 
@@ -117,46 +122,16 @@ impl Form {
 }
 
 struct App {
+    runtime: RuntimeState,
+    render: RenderFeedback,
     language: Language,
     settings_file: Option<PathBuf>,
     language_choice: Option<usize>,
-    language_visible: Cell<bool>,
-    language_hits: RefCell<Vec<(Rect, usize)>>,
     path: PathBuf,
     creating: bool,
-    master: Input,
-    confirmation: Input,
     auth_field: usize,
-    session: Option<Session>,
-    entries: Vec<(EntryId, String)>,
-    visible: Vec<usize>,
-    selected: usize,
-    query: Input,
-    folder: Option<GroupId>, // None is the cross-folder "all entries" view.
-    folder_name: Input,
-    folder_error: Option<String>,
-    folder_selected: usize,
-    folder_dialog_visible: Cell<bool>,
-    expanded_folders: HashSet<GroupId>,
-    explorer_focus: Option<ExplorerNode>,
-    explorer_hits: RefCell<Vec<(Rect, ExplorerNode)>>,
-    palette_hits: RefCell<Vec<(Rect, Command)>>,
-    pending_folder_delete: Option<GroupId>,
-    form: Option<Form>,
-    mode: Mode,
-    palette: Option<Palette>,
-    palette_visible: Cell<bool>,
-    sensitive: Option<SensitiveForm>,
-    sensitive_visible: Cell<bool>,
-    delete_authorization: Option<DeleteAuthorization>,
-    vault_delete_visible: Cell<bool>,
-    deleted_backup: Option<PathBuf>,
-    update_rx: Option<Receiver<updates::CheckResult>>,
     update_result: Option<UpdateStatus>,
-    update_return: Option<Mode>,
-    update_consent_visible: Cell<bool>,
     clipboard: Clipboard,
-    reveal_until: Option<Instant>,
     last_activity: Instant,
     lock_after: Duration,
     status: String,
@@ -165,52 +140,21 @@ struct App {
     exit: bool,
     browser_origin: Option<String>,
     browser_credentials: Option<Zeroizing<crate::browser::Credentials>>,
-    browser_review_visible: Cell<bool>,
 }
 
 impl App {
     fn new(path: PathBuf, creating: bool, lock_after: Duration) -> Self {
         Self {
+            runtime: RuntimeState::default(),
+            render: RenderFeedback::default(),
             language: Language::default(),
             settings_file: None,
             language_choice: None,
-            language_visible: Cell::new(false),
-            language_hits: RefCell::new(Vec::new()),
             path,
             creating,
-            master: Input::default(),
-            confirmation: Input::default(),
             auth_field: 0,
-            session: None,
-            entries: Vec::new(),
-            visible: Vec::new(),
-            selected: 0,
-            query: Input::default(),
-            folder: None,
-            folder_name: Input::default(),
-            folder_error: None,
-            folder_selected: 0,
-            folder_dialog_visible: Cell::new(false),
-            expanded_folders: HashSet::new(),
-            explorer_focus: None,
-            explorer_hits: RefCell::new(Vec::new()),
-            palette_hits: RefCell::new(Vec::new()),
-            pending_folder_delete: None,
-            form: None,
-            mode: Mode::Browse,
-            palette: None,
-            palette_visible: Cell::new(false),
-            sensitive: None,
-            sensitive_visible: Cell::new(false),
-            delete_authorization: None,
-            vault_delete_visible: Cell::new(false),
-            deleted_backup: None,
-            update_rx: None,
             update_result: None,
-            update_return: None,
-            update_consent_visible: Cell::new(false),
             clipboard: Clipboard::new(),
-            reveal_until: None,
             last_activity: Instant::now(),
             lock_after,
             status: String::new(),
@@ -219,7 +163,6 @@ impl App {
             exit: false,
             browser_origin: None,
             browser_credentials: None,
-            browser_review_visible: Cell::new(false),
         }
     }
     /// Explicitly injected settings location; `new` is pure with respect to config.
@@ -235,7 +178,7 @@ impl App {
         self.language.text(en, ru)
     }
     fn choose_language(&mut self) {
-        if !self.language_visible.get() {
+        if !self.render.language_visible.get() {
             return;
         }
         let Some(choice) = self.language_choice.take() else {
@@ -387,12 +330,12 @@ impl App {
         rows
     }
     fn expand_ancestors(&mut self, folder: GroupId) {
-        let Some(session) = &self.session else {
+        let Some(session) = &self.runtime.session else {
             return;
         };
         let mut current = Some(folder);
         while let Some(id) = current {
-            self.expanded_folders.insert(id);
+            self.runtime.expanded_folders.insert(id);
             current = session.folder_parent(id);
         }
     }
@@ -401,7 +344,8 @@ impl App {
             return;
         }
         if self.explorer_focus.is_none() {
-            self.expanded_folders
+            self.runtime
+                .expanded_folders
                 .insert(self.session.as_ref().unwrap().root_folder());
         }
         if let Some(id) = preferred {
@@ -469,7 +413,7 @@ impl App {
             }
             self.reveal_until = None;
         } else if toggle {
-            self.edit(false);
+            self.execute_shortcut(Command::EditEntry);
         }
     }
     fn explorer_left(&mut self) {
@@ -557,31 +501,11 @@ impl App {
     }
     fn lock(&mut self) {
         self.language_choice = None;
-        self.language_hits.borrow_mut().clear();
-        self.expanded_folders.clear();
-        self.explorer_focus = None;
-        self.explorer_hits.borrow_mut().clear();
-        self.palette_hits.borrow_mut().clear();
-        self.pending_folder_delete = None;
-        self.folder = None;
-        self.folder_name.clear();
-        self.folder_error = None;
-        self.folder_selected = 0;
-        self.sensitive = None;
-        self.delete_authorization = None;
-        self.deleted_backup = None;
-        self.update_rx = None;
-        self.update_return = None;
-        self.palette = None;
-        self.form = None;
-        self.session = None;
-        self.clear_entries();
-        self.query.clear();
-        self.master.clear();
-        self.confirmation.clear();
-        self.reveal_until = None;
+        self.render = RenderFeedback::default();
+        // Drop the complete sensitive working set, including masked authentication
+        // drafts. Approved browser output is deliberately owned separately.
+        self.runtime = RuntimeState::default();
         self.clipboard.clear();
-        self.mode = Mode::Browse;
         self.info(self.tr("Vault locked", "Хранилище заблокировано"));
     }
     fn action(&mut self, action: Action) {
@@ -665,10 +589,10 @@ impl App {
         }
         let data = form.data();
         let id = form.id;
-        let Some(session) = &mut self.session else {
+        let Some(session) = &mut self.runtime.session else {
             return false;
         };
-        let result = match self.folder {
+        let result = match self.runtime.folder {
             Some(folder) => session.update_in_folder(id, &data, Some(folder)),
             None => session.update(id, &data),
         };
@@ -713,86 +637,6 @@ impl App {
             }
         }
     }
-    fn available_commands(&self) -> Vec<Command> {
-        if self.language_choice.is_some()
-            || self.browser_origin.is_some()
-            || matches!(
-                self.mode,
-                Mode::Delete
-                    | Mode::Discard(_)
-                    | Mode::BrowserConfirm
-                    | Mode::VaultAction
-                    | Mode::VaultDeleteConfirm
-                    | Mode::UpdateConsent
-                    | Mode::UpdateResult
-                    | Mode::NewFolder
-                    | Mode::DeleteFolder
-                    | Mode::Folders(_)
-            )
-        {
-            return Vec::new();
-        }
-        if self.mode == Mode::VaultDeleted {
-            return vec![Command::Quit];
-        }
-        let Some(session) = &self.session else {
-            let mut commands = vec![Command::Unlock, Command::Language, Command::CheckUpdates];
-            if self.update_result.is_some() {
-                commands.push(Command::UpdateResult);
-            }
-            commands.push(Command::Quit);
-            return commands;
-        };
-        let mut commands = Vec::new();
-        match self.mode {
-            Mode::Browse => {
-                if !session.readonly {
-                    commands.extend([Command::NewEntry, Command::NewGeneratedEntry]);
-                }
-                commands.push(Command::SearchEntries);
-                if self.selected_id().is_some() {
-                    if !session.readonly {
-                        commands.push(Command::EditEntry);
-                    }
-                    commands.extend([
-                        Command::CopyPassword,
-                        Command::CopyUsername,
-                        Command::RevealPassword,
-                    ]);
-                    if !session.readonly {
-                        commands.push(Command::DeleteEntry);
-                    }
-                }
-                commands.push(Command::OpenFolder);
-                if !session.readonly {
-                    commands.push(Command::NewFolder);
-                    if self.delete_folder_target().is_some() {
-                        commands.push(Command::DeleteFolder);
-                    }
-                    if self.selected_id().is_some() {
-                        commands.push(Command::MoveToFolder);
-                    }
-                }
-                if !session.readonly {
-                    commands.extend([Command::ChangeMaster, Command::DeleteVault]);
-                }
-            }
-            Mode::Edit if self.form.is_some() => {
-                if !session.readonly {
-                    commands.extend([Command::SaveEntry, Command::GeneratePassword]);
-                }
-                commands.extend([Command::RevealPassword, Command::Back]);
-            }
-            Mode::Search => commands.push(Command::Back),
-            _ => {}
-        }
-        commands.extend([Command::Language, Command::CheckUpdates]);
-        if self.update_result.is_some() {
-            commands.push(Command::UpdateResult);
-        }
-        commands.extend([Command::Lock, Command::Quit]);
-        commands
-    }
     fn open_palette(&mut self) {
         if self.available_commands().is_empty() {
             self.warning(if self.browser_origin.is_some() {
@@ -809,7 +653,7 @@ impl App {
             return;
         }
         self.reveal_until = None;
-        self.palette_visible.set(false);
+        self.render.begin_frame();
         self.palette = Some(Palette::default());
     }
     fn toggle_reveal(&mut self) {
@@ -827,15 +671,22 @@ impl App {
         };
     }
     fn execute_command(&mut self, command: Command) {
-        // Re-check at execution time; the palette never bypasses read-only/locked/browser restrictions.
-        if !self.available_commands().contains(&command) {
+        self.dispatch_command(command, Invocation::Palette);
+    }
+    fn execute_shortcut(&mut self, command: Command) {
+        self.dispatch_command(command, Invocation::Keyboard);
+    }
+    fn dispatch_command(&mut self, command: Command, invocation: Invocation) {
+        // Both entry points re-check the same capabilities at execution time.
+        if !self.command_allowed(command, invocation) {
             return;
         }
+        self.render.begin_frame();
         self.palette = None;
         match command {
             Command::Language => {
                 self.reveal_until = None;
-                self.language_visible.set(false);
+                self.render.language_visible.set(false);
                 self.language_choice = Some(usize::from(self.language == Language::Russian));
             }
             Command::Unlock => {} // Return to the masked input; never submit an existing master draft implicitly.
@@ -846,7 +697,7 @@ impl App {
                 self.folder_error = None;
                 self.reveal_until = None;
                 self.clear_notice();
-                self.folder_dialog_visible.set(false);
+                self.render.folder_dialog_visible.set(false);
                 self.mode = Mode::NewFolder;
             }
             Command::DeleteFolder => {
@@ -854,14 +705,14 @@ impl App {
                 self.folder = self.pending_folder_delete;
                 self.reveal_until = None;
                 self.clear_notice();
-                self.folder_dialog_visible.set(false);
+                self.render.folder_dialog_visible.set(false);
                 self.mode = Mode::DeleteFolder;
             }
             Command::OpenFolder | Command::MoveToFolder => {
                 self.reveal_until = None;
                 self.clear_notice();
                 self.folder_selected = 0;
-                self.folder_dialog_visible.set(false);
+                self.render.folder_dialog_visible.set(false);
                 self.mode = Mode::Folders(command == Command::MoveToFolder);
             }
             Command::NewGeneratedEntry => {
@@ -881,7 +732,13 @@ impl App {
                 self.save();
             }
             Command::GeneratePassword => self.generate(),
-            Command::Back => self.leave(Action::Browse),
+            Command::Back => {
+                if self.mode == Mode::Search {
+                    self.query.clear();
+                    self.filter(None);
+                }
+                self.leave(Action::Browse);
+            }
             Command::CheckUpdates => {
                 if self.update_rx.is_some() {
                     self.info(self.tr(
@@ -891,7 +748,7 @@ impl App {
                 } else {
                     self.update_return = Some(self.mode);
                     self.mode = Mode::UpdateConsent;
-                    self.update_consent_visible.set(false);
+                    self.render.update_consent_visible.set(false);
                 }
             }
             Command::UpdateResult => {
@@ -912,7 +769,7 @@ impl App {
             .filtered(&self.available_commands());
         match key.code {
             KeyCode::Esc => self.palette = None,
-            KeyCode::Enter if self.palette_visible.get() => {
+            KeyCode::Enter if self.render.palette_visible.get() => {
                 if let Some(command) = commands.get(self.palette.as_ref().unwrap().selected) {
                     self.execute_command(*command);
                 }
@@ -948,13 +805,13 @@ impl App {
             .unwrap_or_else(|| self.tr("All entries", "Все записи").into())
     }
     fn submit_folder(&mut self) {
-        if !self.folder_dialog_visible.get() {
+        if !self.render.folder_dialog_visible.get() {
             return;
         }
-        let Some(session) = &mut self.session else {
+        let Some(session) = &mut self.runtime.session else {
             return;
         };
-        match session.create_folder(self.folder, self.folder_name.text()) {
+        match session.create_folder(self.runtime.folder, self.runtime.folder_name.text()) {
             Ok(id) => {
                 self.folder = Some(id);
                 self.expand_ancestors(id);
@@ -971,7 +828,7 @@ impl App {
         }
     }
     fn confirm_folder_delete(&mut self) {
-        if !self.folder_dialog_visible.get() {
+        if !self.render.folder_dialog_visible.get() {
             return;
         }
         let Some(folder) = self.pending_folder_delete else {
@@ -1001,7 +858,7 @@ impl App {
         }
     }
     fn choose_folder(&mut self, moving: bool) {
-        if !self.folder_dialog_visible.get() {
+        if !self.render.folder_dialog_visible.get() {
             return;
         }
         let options = self.folder_options(moving);
@@ -1042,7 +899,7 @@ impl App {
         self.clear_notice();
         self.delete_authorization = None;
         self.sensitive = Some(SensitiveForm::new(kind));
-        self.sensitive_visible.set(false);
+        self.render.sensitive_visible.set(false);
         self.mode = Mode::VaultAction;
     }
     fn cancel_sensitive(&mut self) {
@@ -1051,7 +908,7 @@ impl App {
         self.mode = Mode::Browse;
     }
     fn submit_sensitive(&mut self) {
-        if !self.sensitive_visible.get() {
+        if !self.render.sensitive_visible.get() {
             self.warning(self.tr(
                 "Enlarge the window to see the form and warnings.",
                 "Увеличьте окно, чтобы увидеть форму и предупреждения.",
@@ -1082,7 +939,7 @@ impl App {
         match result {
             Ok(Some(authorization)) => {
                 self.delete_authorization = Some(authorization);
-                self.vault_delete_visible.set(false);
+                self.render.vault_delete_visible.set(false);
                 self.mode = Mode::VaultDeleteConfirm;
             }
             Ok(None) => {
@@ -1104,7 +961,7 @@ impl App {
         // `form` drops here: all current/new master inputs use zeroizing buffers.
     }
     fn confirm_vault_delete(&mut self) {
-        if !self.vault_delete_visible.get() {
+        if !self.render.vault_delete_visible.get() {
             return;
         }
         let Some(authorization) = self.delete_authorization.take() else {
@@ -1134,7 +991,7 @@ impl App {
         self.mode = self.update_return.take().unwrap_or(Mode::Browse);
     }
     fn start_update_check(&mut self) {
-        if !self.update_consent_visible.get() {
+        if !self.render.update_consent_visible.get() {
             return;
         }
         self.close_update_dialog();
@@ -1228,7 +1085,7 @@ impl App {
             _ => None,
         };
         if ctrl && letter == Some('q') {
-            self.leave(Action::Quit);
+            self.execute_shortcut(Command::Quit);
             return;
         }
         if ctrl && letter == Some('p') {
@@ -1243,7 +1100,7 @@ impl App {
             return;
         }
         if ctrl && letter == Some('l') && self.session.is_some() {
-            self.leave(Action::Lock);
+            self.execute_shortcut(Command::Lock);
             return;
         }
         if let Some(choice) = &mut self.language_choice {
@@ -1382,9 +1239,12 @@ impl App {
                     self.selected = (self.selected + 1).min(self.visible.len().saturating_sub(1));
                 }
                 (Mode::Browse, KeyCode::Enter) if self.selected_id().is_some() => {
+                    self.render.browser_review_visible.set(false);
                     self.mode = Mode::BrowserConfirm;
                 }
-                (Mode::BrowserConfirm, KeyCode::Char('y')) if self.browser_review_visible.get() => {
+                (Mode::BrowserConfirm, KeyCode::Char('y'))
+                    if self.render.browser_review_visible.get() =>
+                {
                     if let Some(data) = self
                         .selected_id()
                         .and_then(|id| self.session.as_ref()?.entry(id))
@@ -1404,13 +1264,16 @@ impl App {
                         }
                     }
                 }
-                (Mode::BrowserConfirm, KeyCode::Char('n')) => self.mode = Mode::Browse,
+                (Mode::BrowserConfirm, KeyCode::Char('n')) => {
+                    self.render.browser_review_visible.set(false);
+                    self.mode = Mode::Browse;
+                }
                 _ => {}
             }
             return;
         }
         if ctrl && letter == Some('o') {
-            self.toggle_reveal();
+            self.execute_shortcut(Command::RevealPassword);
             return;
         }
         match self.mode {
@@ -1425,11 +1288,11 @@ impl App {
             Mode::BrowserConfirm => {}
             Mode::Edit => {
                 if ctrl && letter == Some('s') {
-                    self.save();
+                    self.execute_shortcut(Command::SaveEntry);
                 } else if ctrl && letter == Some('g') {
-                    self.generate();
+                    self.execute_shortcut(Command::GeneratePassword);
                 } else if key.code == KeyCode::Esc {
-                    self.leave(Action::Browse);
+                    self.execute_shortcut(Command::Back);
                 } else if let Some(form) = &mut self.form {
                     match key.code {
                         KeyCode::Tab => form.field = (form.field + 1) % 5,
@@ -1471,9 +1334,7 @@ impl App {
             },
             Mode::Search => match key.code {
                 KeyCode::Esc => {
-                    self.query.clear();
-                    self.filter(None);
-                    self.mode = Mode::Browse;
+                    self.execute_shortcut(Command::Back);
                 }
                 KeyCode::Enter => self.mode = Mode::Browse,
                 _ => {
@@ -1491,7 +1352,7 @@ impl App {
                     self.explorer_right(true)
                 }
                 KeyCode::Delete | KeyCode::Char('d') if self.delete_folder_target().is_some() => {
-                    self.execute_command(Command::DeleteFolder)
+                    self.execute_shortcut(Command::DeleteFolder)
                 }
                 KeyCode::Up => {
                     self.selected = self.selected.saturating_sub(1);
@@ -1501,32 +1362,27 @@ impl App {
                     self.selected = (self.selected + 1).min(self.visible.len().saturating_sub(1));
                     self.reveal_until = None;
                 }
-                KeyCode::Char('q') => self.action(Action::Quit),
-                KeyCode::Char('/') => self.mode = Mode::Search,
+                KeyCode::Char('q') => self.execute_shortcut(Command::Quit),
+                KeyCode::Char('/') => self.execute_shortcut(Command::SearchEntries),
                 KeyCode::Esc => {
                     self.query.clear();
                     self.filter(None);
                     self.reveal_until = None;
                 }
-                KeyCode::Char('n') => self.edit(true),
-                KeyCode::Char('f') => self.execute_command(Command::OpenFolder),
-                KeyCode::Char('F') => self.execute_command(Command::NewFolder),
-                KeyCode::Char('m') => self.execute_command(Command::MoveToFolder),
-                KeyCode::Char('g') => {
-                    self.edit(true);
-                    if self.mode == Mode::Edit {
-                        self.generate();
-                    }
-                }
-                KeyCode::Enter => self.edit(false),
+                KeyCode::Char('n') => self.execute_shortcut(Command::NewEntry),
+                KeyCode::Char('f') => self.execute_shortcut(Command::OpenFolder),
+                KeyCode::Char('F') => self.execute_shortcut(Command::NewFolder),
+                KeyCode::Char('m') => self.execute_shortcut(Command::MoveToFolder),
+                KeyCode::Char('g') => self.execute_shortcut(Command::NewGeneratedEntry),
+                KeyCode::Enter => self.execute_shortcut(Command::EditEntry),
                 KeyCode::Delete | KeyCode::Char('d') if self.selected_id().is_some() => {
-                    self.mode = Mode::Delete
+                    self.execute_shortcut(Command::DeleteEntry)
                 }
                 KeyCode::Char('p') if key.modifiers.is_empty() => {
-                    self.toggle_reveal();
+                    self.execute_shortcut(Command::RevealPassword);
                 }
-                KeyCode::Char('c') => self.copy(false),
-                KeyCode::Char('u') => self.copy(true),
+                KeyCode::Char('c') => self.execute_shortcut(Command::CopyPassword),
+                KeyCode::Char('u') => self.execute_shortcut(Command::CopyUsername),
                 _ => {}
             },
         }
@@ -1543,9 +1399,11 @@ impl App {
         self.last_activity = Instant::now();
         let point = (event.column, event.row).into();
         if self.language_choice.is_some() {
-            if event.kind == MouseEventKind::Down(MouseButton::Left) && self.language_visible.get()
+            if event.kind == MouseEventKind::Down(MouseButton::Left)
+                && self.render.language_visible.get()
             {
                 let choice = self
+                    .render
                     .language_hits
                     .borrow()
                     .iter()
@@ -1561,6 +1419,7 @@ impl App {
         if self.palette.is_some() {
             if event.kind == MouseEventKind::Down(MouseButton::Left) {
                 let command = self
+                    .render
                     .palette_hits
                     .borrow()
                     .iter()
@@ -1578,6 +1437,7 @@ impl App {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let node = self
+                    .render
                     .explorer_hits
                     .borrow()
                     .iter()
@@ -1592,6 +1452,7 @@ impl App {
             }
             MouseEventKind::ScrollDown
                 if self
+                    .render
                     .explorer_hits
                     .borrow()
                     .iter()
@@ -1601,6 +1462,7 @@ impl App {
             }
             MouseEventKind::ScrollUp
                 if self
+                    .render
                     .explorer_hits
                     .borrow()
                     .iter()
@@ -1648,7 +1510,7 @@ impl App {
             }
             return;
         }
-        match self.mode {
+        match self.runtime.mode {
             Mode::Edit => {
                 if let Some(form) = &mut self.form {
                     let normalized = Zeroizing::new(text.replace("\r\n", "\n"));
@@ -1659,21 +1521,12 @@ impl App {
                     }
                 }
             }
-            Mode::Search if self.query.insert(text, false) => self.filter(None),
+            Mode::Search if self.runtime.query.insert(text, false) => self.filter(None),
             _ => {}
         }
     }
     fn draw(&self, frame: &mut Frame) {
-        self.language_visible.set(false);
-        self.language_hits.borrow_mut().clear();
-        self.explorer_hits.borrow_mut().clear();
-        self.palette_hits.borrow_mut().clear();
-        self.folder_dialog_visible.set(false);
-        self.browser_review_visible.set(false);
-        self.palette_visible.set(false);
-        self.sensitive_visible.set(false);
-        self.vault_delete_visible.set(false);
-        self.update_consent_visible.set(false);
+        self.render.begin_frame();
         let area = frame.area();
         frame.render_widget(Block::default().style(base()), area);
         if area.width < 60 || area.height < 20 {
@@ -1971,14 +1824,14 @@ impl App {
             Mode::NewFolder => {
                 let parent = if self.folder.is_some() { self.folder_label() } else { "/".into() };
                 popup(frame, &localized!(self.language, "Parent: {parent}\n\nFolder name:\n{}\n\nUp to 128 bytes, no / or \\.\n{}\n\nEnter create · Esc cancel", "Родитель: {parent}\n\nИмя папки:\n{}\n\nДо 128 байт, без / и \\.\n{}\n\nEnter создать · Esc отмена", self.folder_name.rendered(false, true), i18n::error(self.language, self.folder_error.as_deref().unwrap_or(""))), self.tr(" New folder ", " Новая папка "), 16);
-                self.folder_dialog_visible.set(true);
+                self.render.folder_dialog_visible.set(true);
             }
             Mode::Folders(moving) => self.draw_folders(frame, moving),
             Mode::VaultAction => self.draw_sensitive(frame),
             Mode::VaultDeleteConfirm => self.draw_vault_delete_confirmation(frame),
             Mode::UpdateConsent => {
                 popup(frame, self.tr("Send a request to api.github.com?\n\nGitHub receives your IP and User-Agent with the TermVault version.\nPasswords, the vault, its path and the current site are NOT sent.\n\nChecks run only on this command.\nTimeout: 10 seconds. No automatic installation.\n\n[Enter] Check   [Esc] Cancel", "Отправить запрос к api.github.com?\n\nGitHub получит ваш IP и User-Agent с версией TermVault.\nПароли, база, её путь и текущий сайт НЕ передаются.\n\nПроверка выполняется только по этой команде.\nТайм-аут — 10 секунд. Автоустановки нет.\n\n[Enter] Проверить   [Esc] Отмена"), self.tr(" Check for updates ", " Проверить обновления "), 18);
-                self.update_consent_visible.set(true);
+                self.render.update_consent_visible.set(true);
             }
             Mode::UpdateResult => {
                 let text = self.update_result.as_ref().map(|status| status.description(self.language)).unwrap_or_else(|| self.tr("No update check result.", "Результат проверки отсутствует.").into());
@@ -1987,7 +1840,7 @@ impl App {
             Mode::BrowserConfirm => {
                 let title = self.selected_id().and_then(|id| self.session.as_ref()?.entry(id))
                     .map(|entry| input::display(&entry.title).replace('\n', " ").chars().take(80).collect::<String>()).unwrap_or_default();
-                self.browser_review_visible.set(true);
+                self.render.browser_review_visible.set(true);
                 popup(frame, &localized!(self.language, "Send login and password for:\n{title}\nTo: {}\n\n[y] Approve once   [n] Back   [Esc] Cancel", "Отправить логин и пароль записи:\n{title}\nСайту: {}\n\n[y] Одобрить один раз   [n] Назад   [Esc] Отмена", self.browser_origin.as_deref().unwrap_or("")), self.tr(" Confirm browser fill ", " Подтвердить автозаполнение "), 18);
             }
             Mode::Search=>popup(frame,&localized!(self.language, "{}\nEnter applies · Esc clears", "{}\nEnter применить · Esc очистить", if self.query.text().is_empty() { self.tr("Search entry titles…", "Поиск по названиям…").to_owned() } else { self.query.rendered(false,true) }),self.tr(" Filter entry titles ", " Поиск по названиям "),5),
@@ -2007,149 +1860,6 @@ impl App {
             3 => "URL",
             _ => self.tr("Notes", "Заметки"),
         }
-    }
-
-    fn draw_language(&self, frame: &mut Frame) {
-        let Some(choice) = self.language_choice else {
-            return;
-        };
-        let area = frame.area();
-        let width = area.width.saturating_sub(4).min(52);
-        let height = 8;
-        if width < 30 || area.height < height + 4 {
-            return;
-        }
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
-            width,
-            height,
-        );
-        dim_backdrop(frame);
-        frame.render_widget(Clear, rect);
-        let block = panel(self.tr(" Language ", " Язык "));
-        let inner = block.inner(rect);
-        frame.render_widget(block, rect);
-        let rows = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-        frame.render_stateful_widget(
-            List::new([ListItem::new("English"), ListItem::new("Русский")])
-                .style(theme::surface())
-                .highlight_style(theme::selected())
-                .highlight_symbol("› "),
-            rows[1],
-            &mut ListState::default().with_selected(Some(choice)),
-        );
-        frame.render_widget(
-            Paragraph::new(self.tr(
-                "↑↓ select · Enter apply · Esc cancel",
-                "↑↓ выбор · Enter применить · Esc отмена",
-            ))
-            .style(theme::surface().fg(theme::MUTED)),
-            rows[3],
-        );
-        for index in 0..2 {
-            self.language_hits.borrow_mut().push((
-                Rect::new(rows[1].x, rows[1].y + index as u16, rows[1].width, 1),
-                index,
-            ));
-        }
-        self.language_visible.set(true);
-    }
-
-    fn draw_explorer(&self, frame: &mut Frame, area: Rect) {
-        let rows = self.explorer_rows();
-        let selected = rows
-            .iter()
-            .position(|row| Some(row.node) == self.explorer_focus);
-        let block = panel(self.tr(" Explorer ", " Проводник ")).padding(Padding::new(0, 0, 1, 0));
-        let inner = block.inner(area);
-        let items: Vec<_> = rows
-            .iter()
-            .map(|row| {
-                let indent = "  ".repeat(row.depth);
-                let (icon, color) = match row.node {
-                    ExplorerNode::Folder(id) => (
-                        if self.expanded_folders.contains(&id) {
-                            "▾ ▰ "
-                        } else {
-                            "▸ ▰ "
-                        },
-                        theme::MUTED,
-                    ),
-                    ExplorerNode::Entry(_) => ("  · ", theme::MUTED),
-                };
-                ListItem::new(Line::from(vec![
-                    Span::raw(indent),
-                    Span::styled(icon, Style::default().fg(color)),
-                    Span::raw(row.label.as_str()),
-                ]))
-            })
-            .collect();
-        let mut state = ListState::default().with_selected(selected);
-        frame.render_stateful_widget(
-            List::new(items)
-                .block(block)
-                .style(theme::surface())
-                .highlight_style(Style::default().bg(theme::TOAST_EDGE).fg(theme::TEXT)),
-            area,
-            &mut state,
-        );
-        for (index, row) in rows
-            .iter()
-            .enumerate()
-            .skip(state.offset())
-            .take(usize::from(inner.height))
-        {
-            self.explorer_hits.borrow_mut().push((
-                Rect::new(
-                    inner.x,
-                    inner.y + (index - state.offset()) as u16,
-                    inner.width,
-                    1,
-                ),
-                row.node,
-            ));
-        }
-    }
-
-    fn draw_folder_delete(&self, frame: &mut Frame) {
-        let Some((entries, folders)) = self
-            .pending_folder_delete
-            .and_then(|id| self.session.as_ref()?.folder_contents(id))
-        else {
-            return;
-        };
-        let area = frame.area();
-        let width = area.width.saturating_sub(4).min(90);
-        let text = localized!(self.language, "Folder: {}\n\nEntries to delete: {entries}\nNested folders: {folders}\n\nAll contents of nested folders will also be deleted.\nAn encrypted backup will be kept. This is not secure erasure.\n\n[d] Delete folder and contents   [Esc] Cancel", "Папка: {}\n\nБудут удалены записи: {entries}\nВложенные папки: {folders}\n\nВсё содержимое вложенных папок тоже будет удалено.\nЗашифрованный бэкап сохранится. Это не безопасное стирание.\n\n[d] Удалить папку и содержимое   [Esc] Отмена", self.folder_label());
-        let lines = wrap_plain_text(&text, usize::from(width.saturating_sub(2)));
-        let height = lines.len() + 2;
-        if height > usize::from(area.height.saturating_sub(4)) {
-            popup(frame, self.tr("The path and warnings do not fit.\nEnlarge the window to confirm.\n\nEsc — cancel", "Путь и предупреждения не помещаются.\nУвеличьте окно для подтверждения.\n\nEsc — отмена"), self.tr(" Deletion blocked ", " Удаление заблокировано "), 8);
-            return;
-        }
-        let height = height as u16;
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
-            width,
-            height,
-        );
-        dim_backdrop(frame);
-        frame.render_widget(Clear, rect);
-        frame.render_widget(
-            Paragraph::new(lines.into_iter().map(Line::from).collect::<Vec<_>>())
-                .block(panel(self.tr(" Delete folder? ", " Удалить папку? ")))
-                .style(theme::surface().fg(theme::WARNING)),
-            rect,
-        );
-        self.folder_dialog_visible.set(true);
     }
 
     fn draw_folders(&self, frame: &mut Frame, moving: bool) {
@@ -2205,7 +1915,7 @@ impl App {
             .style(theme::surface().fg(theme::MUTED)),
             rows[1],
         );
-        self.folder_dialog_visible.set(true);
+        self.render.folder_dialog_visible.set(true);
     }
 
     fn draw_auth(&self, frame: &mut Frame) {
@@ -2314,133 +2024,6 @@ impl App {
             .alignment(Alignment::Center),
             Rect::new(rect.x, hint_y + 3, width, 1),
         );
-    }
-
-    fn draw_sensitive(&self, frame: &mut Frame) {
-        let Some(form) = &self.sensitive else {
-            return;
-        };
-        let area = frame.area();
-        let width = area.width.saturating_sub(4).min(90);
-        let height = 18.min(area.height.saturating_sub(2));
-        if width < 56 || height < 18 {
-            return;
-        }
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
-            width,
-            height,
-        );
-        let (title, description) = match form.kind {
-            SensitiveKind::ChangeMaster => (
-                self.tr(" Change master password ", " Сменить мастер-пароль "),
-                self.tr("New password: at least 12 characters.\nIMPORTANT: previous backups require the OLD password.", "Минимум 12 символов в новом пароле.\nВАЖНО: прежние бэкапы требуют СТАРЫЙ пароль.")
-                    .to_string(),
-            ),
-            SensitiveKind::DeleteVault => {
-                let active_path = self
-                    .session
-                    .as_ref()
-                    .map(|session| session.path())
-                    .unwrap_or(&self.path);
-                let filename = active_path
-                    .file_name()
-                    .map(|name| input::display(&name.to_string_lossy()))
-                    .unwrap_or_default();
-                let shown: String = filename.chars().take(80).collect();
-                (self.tr(" Delete vault ", " Удалить хранилище "), localized!(self.language, "Filename: {shown}\nAfter entering the password and exact filename, another confirmation follows.\nAn encrypted backup will be kept.", "Имя файла: {shown}\nПосле ввода пароля и точного имени будет ещё одно подтверждение.\nЗашифрованный бэкап сохранится."))
-            }
-        };
-        let block = panel(title);
-        let inner = block.inner(rect);
-        dim_backdrop(frame);
-        frame.render_widget(Clear, rect);
-        frame.render_widget(block, rect);
-        let labels = form.labels(self.language);
-        let mut constraints = vec![Constraint::Length(if labels.len() == 3 { 3 } else { 6 })];
-        constraints.extend(std::iter::repeat_n(Constraint::Length(3), labels.len()));
-        constraints.extend([Constraint::Length(3), Constraint::Length(1)]);
-        let rows = Layout::vertical(constraints).split(inner);
-        frame.render_widget(
-            Paragraph::new(description)
-                .wrap(Wrap { trim: false })
-                .style(theme::surface().fg(theme::WARNING)),
-            rows[0],
-        );
-        for (i, label) in labels.iter().enumerate() {
-            let active = form.field == i;
-            frame.render_widget(
-                Paragraph::new(form.fields[i].rendered(form.masked(i), active))
-                    .block(
-                        panel(&format!(" {}{} ", if active { "› " } else { "" }, label))
-                            .border_style(Style::default().fg(if active {
-                                theme::PRIMARY
-                            } else {
-                                theme::BORDER
-                            }))
-                            .title_style(Style::default().fg(if active {
-                                theme::PRIMARY
-                            } else {
-                                theme::MUTED
-                            })),
-                    )
-                    .style(theme::surface()),
-                rows[i + 1],
-            );
-        }
-        frame.render_widget(
-            Paragraph::new(i18n::error(
-                self.language,
-                form.error.as_deref().unwrap_or(""),
-            ))
-            .wrap(Wrap { trim: false })
-            .style(theme::surface().fg(theme::ERROR)),
-            rows[labels.len() + 1],
-        );
-        frame.render_widget(
-            Paragraph::new(self.tr(
-                "Tab field · Enter next/confirm · Esc cancel",
-                "Tab поле · Enter далее/подтвердить · Esc отмена",
-            ))
-            .style(theme::surface().fg(theme::MUTED)),
-            rows[labels.len() + 2],
-        );
-        self.sensitive_visible.set(true);
-    }
-    fn draw_vault_delete_confirmation(&self, frame: &mut Frame) {
-        let area = frame.area();
-        let width = area.width.saturating_sub(4).min(100);
-        let active_path = self
-            .session
-            .as_ref()
-            .map(|session| session.path())
-            .unwrap_or(&self.path);
-        let text = localized!(self.language, "Active file:\n{}\n\nIt will be moved to an encrypted backup.\nOther backups will remain. This is not secure erasure.\nConfirmation expires after 60 seconds.\n\n[d] Delete active file   [Esc] Cancel", "Активный файл:\n{}\n\nОн будет перемещён в зашифрованный бэкап.\nОстальные бэкапы сохранятся. Это не безопасное стирание.\nПодтверждение действует 60 секунд.\n\n[d] Удалить активный файл   [Esc] Отмена", input::display(&active_path.display().to_string()));
-        let lines = wrap_plain_text(&text, usize::from(width.saturating_sub(2)));
-        let height = lines.len() + 2;
-        if width < 20 || height > usize::from(area.height.saturating_sub(4).min(26)) {
-            popup(frame, self.tr("The full path and warnings do not fit.\nEnlarge the window to confirm deletion.\n\n[Esc] Cancel", "Полный путь и предупреждения не помещаются.\nУвеличьте окно, чтобы подтвердить удаление.\n\n[Esc] Отмена"), self.tr(" Deletion blocked ", " Удаление заблокировано "), 8);
-            return;
-        }
-        let height = height as u16;
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
-            width,
-            height,
-        );
-        dim_backdrop(frame);
-        frame.render_widget(Clear, rect);
-        frame.render_widget(
-            Paragraph::new(lines.into_iter().map(Line::from).collect::<Vec<_>>())
-                .block(panel(
-                    self.tr(" Final confirmation ", " Окончательное подтверждение "),
-                ))
-                .style(theme::surface().fg(theme::WARNING)),
-            rect,
-        );
-        self.vault_delete_visible.set(true);
     }
 
     fn draw_palette(&self, frame: &mut Frame) {
@@ -2553,7 +2136,7 @@ impl App {
             let offset = (selected_row + 1).saturating_sub(usize::from(rows[1].height));
             for (index, command) in command_rows {
                 if index >= offset && index < offset + usize::from(rows[1].height) {
-                    self.palette_hits.borrow_mut().push((
+                    self.render.palette_hits.borrow_mut().push((
                         Rect::new(
                             rows[1].x,
                             rows[1].y + (index - offset) as u16,
@@ -2579,7 +2162,7 @@ impl App {
             .style(normal.fg(muted)),
             rows[2],
         );
-        self.palette_visible.set(true);
+        self.render.palette_visible.set(true);
     }
 
     fn draw_notice(&self, frame: &mut Frame) {
@@ -2639,67 +2222,6 @@ impl Drop for App {
     fn drop(&mut self) {
         self.lock();
     }
-}
-fn invert() -> Style {
-    theme::selected()
-}
-fn panel(title: &str) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .title(title.to_owned())
-        .style(theme::surface())
-        .border_style(Style::default().fg(theme::BORDER))
-        .title_style(Style::default().fg(theme::SECONDARY))
-}
-fn dim_backdrop(frame: &mut Frame) {
-    let area = frame.area();
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            frame.buffer_mut()[(x, y)].set_style(
-                Style::default()
-                    .fg(theme::DIMMED)
-                    .bg(theme::INK)
-                    .remove_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::DIM),
-            );
-        }
-    }
-}
-fn wrap_plain_text(text: &str, width: usize) -> Vec<String> {
-    let mut result = Vec::new();
-    for line in text.lines() {
-        let mut row = String::new();
-        let mut used = 0;
-        for character in line.chars() {
-            let cells = Line::from(character.to_string()).width();
-            if used + cells > width.max(1) && !row.is_empty() {
-                result.push(std::mem::take(&mut row));
-                used = 0;
-            }
-            row.push(character);
-            used += cells;
-        }
-        result.push(row);
-    }
-    result
-}
-fn popup(frame: &mut Frame, text: &str, title: &str, height: u16) {
-    let area = frame.area();
-    let width = 82.min(area.width);
-    let height = height.min(area.height);
-    let rect = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-    dim_backdrop(frame);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(
-        Paragraph::new(text)
-            .block(panel(title))
-            .wrap(Wrap { trim: false }),
-        rect,
-    );
 }
 struct Guard;
 impl Drop for Guard {
@@ -2785,6 +2307,10 @@ fn run_app(mut app: App) -> Result<Option<Zeroizing<crate::browser::Credentials>
 #[cfg(test)]
 #[path = "screenshots.rs"]
 mod screenshots;
+
+#[cfg(test)]
+#[path = "app/audit_tests.rs"]
+mod audit_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3049,7 +2575,7 @@ mod tests {
         assert!(text.contains("Удалить папку?"));
         assert!(text.contains("Будут удалены записи: 1"));
         assert!(text.contains("Work"));
-        assert!(app.folder_dialog_visible.get());
+        assert!(app.render.folder_dialog_visible.get());
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app
             .session
@@ -3108,7 +2634,7 @@ mod tests {
         assert!(text.contains("Окончательное подтверждение"));
         assert!(text.contains("Это не безопасное стирание"));
         assert!(text.contains("60 секунд"));
-        assert!(app.vault_delete_visible.get());
+        assert!(app.render.vault_delete_visible.get());
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.delete_authorization.is_none());
         assert_eq!(std::fs::read(&app.path).unwrap(), before);
@@ -3122,6 +2648,7 @@ mod tests {
         app.execute_command(Command::Language);
         let _ = screen(&app);
         let hit = app
+            .render
             .language_hits
             .borrow()
             .iter()
@@ -3319,6 +2846,7 @@ mod tests {
         app.paste("пап");
         let _ = screen(&app);
         let hit = app
+            .render
             .palette_hits
             .borrow()
             .iter()
@@ -3364,6 +2892,7 @@ mod tests {
         let (_root, mut app, work, _, id) = explorer_fixture();
         let _ = screen(&app);
         let hit = app
+            .render
             .explorer_hits
             .borrow()
             .iter()
@@ -3392,7 +2921,7 @@ mod tests {
         app.lock();
         assert!(app.explorer_focus.is_none());
         assert!(app.expanded_folders.is_empty());
-        assert!(app.explorer_hits.borrow().is_empty());
+        assert!(app.render.explorer_hits.borrow().is_empty());
     }
     #[test]
     fn folder_deletion_requires_a_visible_confirmation_and_can_be_cancelled() {
@@ -3537,7 +3066,7 @@ mod tests {
         app.palette.as_mut().unwrap().selected = last;
         let rows = screen_rows(&app, 60, 20);
         assert!(rows.join("").contains("Quit"));
-        assert!(app.palette_visible.get());
+        assert!(app.render.palette_visible.get());
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.exit);
     }
@@ -3759,7 +3288,7 @@ mod tests {
         app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert!(app.path.exists());
         assert!(screen(&app).contains("Final confirmation"));
-        assert!(app.vault_delete_visible.get());
+        assert!(app.render.vault_delete_visible.get());
         app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::VaultDeleted);
         assert!(app.session.is_none());

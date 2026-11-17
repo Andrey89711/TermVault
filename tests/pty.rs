@@ -248,7 +248,10 @@ fn real_terminal_folder_tree_and_delete_command_are_distinct_from_creation() {
     term.paste("удаление папки");
     term.action(b"\r", "Deletefolder?");
     term.expect(0, "Entriestodelete:1");
-    term.send(b"\x1b");
+    // Wait for the browse footer, not the Explorer title (which is visible
+    // behind the dialog too). Unix terminals may otherwise decode Esc followed
+    // immediately by Ctrl+Q as one Alt+Ctrl+Q event instead of cancel then quit.
+    term.action(b"\x1b", "Enteropen/edit");
     term.exit();
 }
 

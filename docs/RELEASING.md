@@ -39,7 +39,11 @@ after the first successful run; workflows alone do not enforce branch protection
    import-table check rejects external VC++ runtime DLL dependencies.
 5. The workflow verifies the ZIP file allowlist, uploads the ZIP and SHA-256,
    verifies the checksums again on the publishing runner, and creates a **draft**
-   GitHub Release. Only this final job has `contents: write`.
+    GitHub Release. Only this final job has `contents: write`.
+6. Download and check the draft ZIP on Windows: run `tvault.exe --version`, create
+   a disposable test vault and check extension connection/filling. Review release
+   notes, then click **Publish release** in GitHub. No automatic public publication
+   occurs; documentation changes alone do not release a new version.
 
 ## Contents and installation checks
 
@@ -50,9 +54,6 @@ Run `scripts/test-setup.ps1 -BinaryPath <built tvault.exe>` on Windows to test
 install/update/repair in a generated temporary directory. No real user vault or
 browser registration is modified. The extension's ping verifies connectivity only:
 manual browser testing with a dummy HTTPS login is still required before publishing.
-6. Download and check the draft ZIP on Windows: run `tvault.exe --version`, create
-   a disposable test vault and check extension connection/filling. Review release
-   notes, then click **Publish release** in GitHub.
 
 No tag, commit, push or public release is created merely by editing these workflow
 files. Existing releases are not overwritten automatically. No code-signing

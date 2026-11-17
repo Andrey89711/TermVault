@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+- English-default TUI with persistent English/Russian selection through Ctrl+P →
+  Language, preserving the existing `vault` setting in `settings.json`.
+- English documentation and actual-render screenshots for browsing, unlock and commands.
+- Expandable Explorer-style folder tree with nested records, gray selection,
+  keyboard navigation, folder clicks and mouse-wheel navigation.
+- Click-safe command palette action mapping and folder-specific deletion targets;
+  Delete on a folder always opens deletion confirmation, never folder creation.
+- Delete the current folder through Ctrl+P with visible path/subtree counts and
+  explicit confirmation, retaining an encrypted backup; root deletion is blocked.
+- Native KDBX folders and nested folders: create with Shift+F, browse with `f`,
+  move a selected entry with `m`; also available in Ctrl+P. New entries use the
+  current folder; All entries and browser matching continue to span the vault.
+- Centered welcome/unlock screen with TermVault wordmark and masked prompt-style inputs.
+- More compact notification cards with gray edges and a slim status accent, without headings.
+- Shared dark theme across vault screens, focused inputs and confirmation dialogs;
+  peach selection, purple headings, muted secondary text and dimmed modal backdrops.
+- Borderless top-right notification cards with green, amber or pink status accents.
+- Ctrl+P opens a searchable, context-aware command palette for existing vault actions.
+- Centered, borderless command palette with a dimmed backdrop, grouped actions,
+  purple section headings, peach selection and right-aligned keyboard shortcuts.
+- Password reveal moved from Ctrl+P to Ctrl+O; opening the palette hides revealed passwords.
+
+- Top-right, auto-expiring terminal notifications for unlock, save, copy and errors.
+- Removed the duplicated bottom status line; keyboard shortcuts remain in the footer.
+- Masked master-passphrase change with reauthentication and verified replacement;
+  retained encrypted backups continue to use their previous passphrase.
+- Whole-vault removal with password, exact filename and visible final confirmation;
+  moves the active file to an encrypted backup, not secure erasure.
+- Explicitly consented, asynchronous GitHub release checks from the command palette;
+  no scheduled checks, automatic downloads or installation.
+
 ## 0.1.0 — 2026-11-16
 
 First published Windows package. Experimental and unaudited; use test credentials

@@ -28,6 +28,8 @@ zeroize = { version = "1.8", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
+semver = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Storage_FileSystem"] }

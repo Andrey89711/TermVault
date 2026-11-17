@@ -1,7 +1,10 @@
 # TermVault
 
-**Experimental local password vault in your terminal.** Rust, Ratatui, black background,
-white text, ordinary KeePass KDBX4 storage. Command: **`tvault`**.
+[![CI](https://github.com/Andrey89711/TermVault/actions/workflows/ci.yml/badge.svg)](https://github.com/Andrey89711/TermVault/actions/workflows/ci.yml)
+[CI/CD and draft releases](docs/RELEASING.md)
+
+**Experimental local password vault in your terminal.** Rust, Ratatui, dark panels,
+peach accents, purple headings and ordinary KeePass KDBX4 storage. Command: **`tvault`**.
 
 > **Not audited. Do not use this MVP as the only copy of real credentials.**
 > The `keepass` Rust library describes KDBX writing as experimental. Keep independent,
@@ -17,11 +20,22 @@ white text, ordinary KeePass KDBX4 storage. Command: **`tvault`**.
 - Encrypted backups before every mutation, atomic file replacement, external-change checks.
 - No server, account, cloud, automatic URL opening, or arbitrary command execution.
 - Optional private Windows browser extension: click-to-fill with local unlock and explicit approval.
-  See [browser setup (Russian)](browser/README.md). Experimental; test credentials first.
+  See [browser setup](browser/README.md). Experimental; test credentials first.
   Store submission preparation: [publishing checklist](docs/STORE-PUBLISHING.ru.md).
 
 TermVault is independent of OpenTerminal and TerminalNote. It can run in a compatible
 terminal such as Windows Terminal or OpenTerminal. It does not modify shell profiles.
+
+## Screenshots
+
+Actual TUI renders use disposable vaults and fictional records, never personal
+credentials. Passwords remain masked in documentation screenshots.
+
+![Expandable encrypted folder tree and entry details](docs/images/overview.png)
+
+![Centered unlock screen with masked master-passphrase input](docs/images/unlock.png)
+
+![Centered command palette with context-aware actions](docs/images/commands.png)
 
 ## Build and run
 
@@ -64,6 +78,33 @@ Setup saves the chosen absolute vault path in `TermVault/settings.json` in that 
 local-data directory. This file contains no password or encryption key. An explicit
 CLI vault path always overrides the saved default.
 
+### Language and settings
+
+The TUI defaults to **English**. Open **Ctrl+P → Language** and choose **English**
+or **Russian**; the choice persists across restarts. CLI output and documentation
+remain English. Language changes preserve the existing default vault setting.
+Entry contents, folder names, filenames and operating-system diagnostics retain
+their original text. Setup/repair also preserves the saved language preference.
+
+`TermVault/settings.json` in the OS local-data directory stores non-secret settings:
+
+```json
+{
+  "vault": "C:\\Vaults\\personal.kdbx",
+  "language": "en"
+}
+```
+
+The existing path field is **`vault`**, not `vault_path`. Use `en` or `ru` for
+`language`; omitting it selects English. Prefer the language menu and setup wizard
+to manual edits. Neither setting contains a master passphrase or encryption key.
+
+For isolated test sessions, the hidden `--settings-file ABSOLUTE_PATH` option
+selects a disposable settings file explicitly. The optional
+`TERMVAULT_LOCAL_DATA_DIR` environment variable changes the runtime local-data
+root, but PTY tests use the explicit argument to avoid ConPTY environment-forwarding
+differences. Neither mechanism supplies a master password or bypasses vault unlock.
+
 Install the command into your Cargo bin directory, if desired:
 
 ```powershell
@@ -78,29 +119,102 @@ arguments, environment variables, pipes, or files. There is no plaintext export 
 
 | Key | Action |
 | --- | --- |
-| ↑ / ↓ | Select entry |
+| ↑ / ↓ | Select folder or entry |
+| ← / → | Collapse / expand folders; move to parent / first child |
 | `/` | Filter entry titles; Enter applies, Esc clears |
 | `n` | New entry |
 | `g` | New entry with a generated 24-character password |
-| Enter | Edit entry |
+| `f` | Open the folder picker (including All entries and `/`, the root) |
+| Shift+F | Create a folder inside the current folder (root in All entries) |
+| `m` | Move the selected entry to a folder |
+| Enter | Expand/collapse folder or edit entry |
+| Ctrl+P | Open/close the command palette; type a command name in Russian or English |
+| Ctrl+P → Language | Choose and save English or Russian UI language |
+| Ctrl+O | Show/hide the selected/form password (automatically hides after 10 seconds) |
 | `p` | Reveal selected password for 10 seconds |
 | `c` / `u` | Copy password / username |
-| `d` | Ask to delete; another `d` confirms, Esc cancels |
+| Delete / `d` | Ask to delete the selected folder or entry; `d` confirms, Esc cancels |
 | Ctrl+L | Lock vault |
 | `q` / Ctrl+Q | Quit (`q` only in the entry browser) |
 | Tab / Shift+Tab | Next / previous form field |
 | Ctrl+S | Save entry immediately |
 | Ctrl+G | Generate a new password in the entry form |
-| Ctrl+P | Reveal the form password for 10 seconds |
 | Ctrl+U | Clear the current input |
 | ← / →, Home / End, Backspace / Delete | Edit input |
 | Enter in Notes | Insert a newline |
 | Esc in form | Return, confirming if unsaved |
 
 Paste using your terminal's paste action (often Ctrl+Shift+V). Bracketed paste is
-supported; multiline paste is accepted only in Notes. Ctrl+S/L/Q/G also recognize
+supported; multiline paste is accepted only in Notes. Ctrl+S/L/Q/G/P/O also recognize
 the corresponding standard Russian keyboard characters. Single-letter commands
 and confirmations currently use EN. The form does not have undo/redo.
+
+The palette supports ↑/↓ (or Tab/Shift+Tab), Enter or a click on a command to select,
+and Esc to cancel. Clicked commands are mapped directly to the displayed action.
+Only actions available in the current context are listed. Lock, exit and returning
+from an edited entry retain the unsaved-changes confirmation. Deleting a selected
+entry still opens a separate confirmation; selecting the command does not delete it.
+Opening the palette hides any revealed password, and inactivity auto-lock closes it.
+No password is entered in the palette, no command history is saved and no shell
+commands are executed. The palette is unavailable in browser approval/confirmation
+dialogs and while a sensitive confirmation is open.
+
+### Folders
+
+Folders are native KDBX groups inside the same encrypted file, not filesystem
+directories. When folders exist, the left pane is an expandable Explorer tree:
+folders first, then records, with indentation, arrows and a gray selection highlight.
+Click a folder or press Enter to expand/collapse; use ↑/↓ to select and ←/→ to
+navigate parents/children. Click a record to select it, then Enter to edit. The
+TermVault node represents the root and cannot be deleted. New records are saved
+under the selected folder (or alongside the selected record). Editing an existing
+record preserves its folder. Use `m` or **Move entry to folder** to move it.
+
+The `f` picker remains as a quick jump to a folder; All entries returns to the tree.
+Title search spans all folders, including collapsed ones, and displays a flat result
+list. Browser approval also stays a flat, origin-filtered list. Mouse wheel navigation
+is supported in the Explorer; use your terminal's selection override (often Shift)
+to select terminal text while mouse capture is enabled.
+
+Shift+F or **Create folder** creates a folder under the selected folder. Nested
+folders are supported; names must be unique within their parent, 1–128 bytes, with
+no slash or control characters. The vault limit is 100 groups including the root.
+Folder changes use verified encrypted saves and retain backups. To delete a folder,
+select it in the tree, then press Delete or select **Delete selected folder** in Ctrl+P. Confirmation shows
+the full folder path and total record/subfolder counts. Press `d` to remove the
+folder and its entire subtree, or Esc to cancel (Enter does not confirm). Even empty
+folders require confirmation. Root and All entries cannot be deleted. Encrypted
+backups retain the deleted contents; this is not secure erasure. Folder rename is
+not yet offered. Read-only vaults allow browsing only; browser approval
+searches matching entries across all folders and never modifies their structure.
+
+### Sensitive commands and update checks
+
+- **Change master passphrase** is available from the entry list for writable TermVault
+  vaults. Current, new and confirmation inputs are masked in a separate form; Ctrl+O
+  never reveals them. The current passphrase is rechecked, and the encrypted candidate
+  is reopened and verified before replacement. Existing backups, including the one
+  retained for this operation, still require the **old** passphrase; they are not rekeyed.
+- **Delete vault (keep backup)** requires the current passphrase, the exact filename
+  including extension, and a final `d` confirmation after the full target path is visible.
+  Authorization expires after 60 seconds and is bound to the original ciphertext revision.
+  The active file is moved to a random encrypted backup in the same directory. Other
+  backups and unrelated files are not removed. **This is not secure erasure.** The
+  session is locked afterward; Enter/Esc closes the result screen. External file changes
+  cancel the operation. Trusted parent storage and no concurrent editors remain required:
+  the final check/move cannot eliminate all filesystem races, but the moved ciphertext
+  is preserved rather than destroyed.
+- Finish/save/discard an entry draft before changing its master passphrase or deleting
+  the vault; those actions are not offered while editing. Esc and inactivity auto-lock
+  discard sensitive input buffers. Neither action is available for foreign read-only
+  vaults or from the browser bridge.
+- **Check updates** works only after explicit consent to a request to GitHub's public
+  release API. GitHub sees the client IP and `TermVault/<version>` User-Agent, not vault
+  paths, credentials or current sites. HTTPS redirects are disabled, response size is
+  bounded and the request times out after 10 seconds. There are no startup/background
+  scheduled checks and **no downloading, execution or installation** of an update.
+  The result is available through the palette without interrupting an entry draft.
+  This is informational release metadata over HTTPS, not signed update authorization.
 
 ## Locking and unsaved changes
 
@@ -109,8 +223,8 @@ Manual lock/quit/back asks to save, discard, or cancel when an entry draft has c
 **Inactivity auto-lock discards unsaved drafts without waiting for a confirmation**,
 so save important edits before leaving the terminal. There is no draft recovery.
 
-There is no master-password recovery or backdoor. Master-password changes, keyfiles,
-TOTP, passkeys, groups management, and attachments are not implemented.
+There is no master-password recovery or backdoor. Keyfiles, TOTP, passkeys,
+attachments are not implemented.
 Browser filling is an optional read-only Windows integration, not automatic background autofill.
 
 ## Storage and compatibility

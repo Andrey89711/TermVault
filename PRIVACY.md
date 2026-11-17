@@ -44,6 +44,20 @@ IPC copies, OS paging, crash dumps and browser internals cannot be guaranteed to
 erased. Removing the extension does not delete the vault, backups or local bridge
 configuration. Those files remain under your control on your computer.
 
+## Local application maintenance
+
+The standalone terminal application also offers a manual **Check updates** command.
+Only after a separate consent dialog, it requests public release metadata from
+`api.github.com`. GitHub receives your IP address and a `TermVault/<version>`
+User-Agent; no vault contents, credentials, vault paths or current website are sent.
+There are no scheduled checks, automatic downloads or installations. The extension
+and browser bridge do not initiate this request. GitHub handles request metadata
+under its own privacy policy.
+
+Changing the master passphrase does not re-encrypt existing backups: those still
+require the old passphrase. The terminal's vault-removal command moves the active
+encrypted file to a retained backup rather than securely erasing it.
+
 ## Your choices
 
 You can cancel a filling request in the local application, lock the vault, restrict

@@ -30,6 +30,24 @@ try {
     Set-TermVaultDefaultVault -Vault $differentVault -SettingsPath $settingsPath
     if ((Get-TermVaultDefaultVault -SettingsPath $settingsPath) -cne $differentVault) { throw 'Default vault update failed.' }
     if (Test-Path -LiteralPath $differentVault) { throw 'Saving a default must not create/open its vault.' }
+    $withLanguage = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+    $withLanguage | Add-Member -NotePropertyName language -NotePropertyValue 'ru'
+    $withLanguage | Add-Member -NotePropertyName future_setting -NotePropertyValue ([pscustomobject]@{ nested = 42 })
+    [IO.File]::WriteAllText($settingsPath, ($withLanguage | ConvertTo-Json -Depth 10))
+    if ((Get-TermVaultDefaultVault -SettingsPath $settingsPath) -cne $differentVault) { throw 'Language preference broke setup settings loading.' }
+    Set-TermVaultDefaultVault -Vault $dummyVault -SettingsPath $settingsPath
+    $preserved = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+    if ($preserved.language -cne 'ru' -or $preserved.future_setting.nested -ne 42) { throw 'Changing the default vault discarded language or other settings.' }
+    [IO.File]::WriteAllText($settingsPath, '{"language":"en"}')
+    if ((Get-TermVaultDefaultVault -SettingsPath $settingsPath) -cne (Join-Path (Split-Path $settingsPath -Parent) 'vault.kdbx')) { throw 'Language-only preferences broke default vault resolution.' }
+    Set-TermVaultDefaultVault -Vault $dummyVault -SettingsPath $settingsPath
+    if ((Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json).language -cne 'en') { throw 'Language-only preference was lost.' }
+    foreach ($invalid in @('{"vault":false}', '{"language":"de"}', '[]')) {
+        [IO.File]::WriteAllText($settingsPath, $invalid)
+        $rejected = $false
+        try { Set-TermVaultDefaultVault -Vault $dummyVault -SettingsPath $settingsPath } catch { $rejected = $true }
+        if (!$rejected -or (Get-Content -Raw -LiteralPath $settingsPath) -cne $invalid) { throw 'Invalid settings were overwritten.' }
+    }
     $null = Install-TermVaultPayload -SourceRoot $repo -BinaryPath $BinaryPath -Destination $destination
     $null = Install-TermVaultPayload -SourceRoot $destination -BinaryPath $binary -Destination $destination
     if ((Get-FileHash -LiteralPath $dummyVault).Hash -ne $before) { throw 'Update changed an unrelated file.' }

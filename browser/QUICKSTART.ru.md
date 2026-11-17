@@ -1,88 +1,91 @@
-# Запуск готового Windows ZIP
+# Run a prebuilt Windows ZIP
 
-1. Скачайте ZIP для Windows x64 и `SHA256SUMS.txt` из GitHub Releases.
-   Сравните SHA-256 архива с файлом контрольных сумм:
+This guide is in English; its historical filename is retained for existing links.
+
+1. Download the Windows x64 ZIP and `SHA256SUMS.txt` from GitHub Releases.
+   Compare the archive's SHA-256 with the checksum file:
 
    ```powershell
    Get-FileHash .\termvault-0.1.0-windows-x86_64.zip -Algorithm SHA256
    ```
 
-   Имя архива зависит от версии. При несовпадении не запускайте программу.
-   EXE пока не подписан: контрольная сумма не заменяет цифровую подпись и аудит.
+   The filename depends on the version. Do not run the program if hashes differ.
+   The EXE is not signed: a checksum does not replace a digital signature or audit.
 
-2. Распакуйте ZIP, запустите `setup.cmd` или из PowerShell:
+2. Extract the ZIP and run `setup.cmd`, or run this in PowerShell:
 
    ```powershell
    .\setup.ps1
    ```
 
-   Мастер установит программу и расширение в `%LOCALAPPDATA%\Programs\TermVault`.
-   Выберите существующую базу или подтвердите создание новой. Мастер-пароль
-   вводится только в интерфейсе TermVault. Затем выберите браузер, загрузите
-   расширение **из постоянной папки, которую покажет мастер**, и вставьте его ID.
-   На странице сведений расширения откройте «Параметры расширения» →
-   «Проверить подключение». Проверка не требует пароля и не открывает базу.
+   The wizard installs the app and extension in `%LOCALAPPDATA%\Programs\TermVault`.
+   Select an existing vault or confirm creation of a new one. Enter the master
+   passphrase only in the TermVault UI. Select a browser, load the extension
+   **from the permanent folder shown by the wizard**, and paste its ID. On the
+   extension details page, open **Extension options → Check connection**. Labels
+   may be localized. This check requires no password and does not open the vault.
 
-   Мастер автоматически добавляет программу в **пользовательский PATH** и
-   запоминает выбранное хранилище. После установки откройте новый терминал:
+   The wizard adds the app to the **user PATH** and remembers the selected vault.
+   After installation, open a new terminal:
 
    ```powershell
    tvault
    ```
 
-   Если новая вкладка ещё не видит команду, полностью закройте приложение
-   терминала и запустите его снова. Уже открытые процессы сохраняют старый PATH.
-   Явный путь `tvault C:\Vaults\other.kdbx` открывает другую базу без изменения
-   настройки. Настройка содержит только путь, не мастер-пароль.
+   If a new tab still cannot find the command, close the entire terminal application
+   and reopen it. Existing processes retain their old PATH. An explicit
+   `tvault C:\Vaults\other.kdbx` opens another vault without changing the default.
+   Settings contain only non-secret preferences, never the master passphrase.
+   The UI defaults to English; **Ctrl+P → Language** saves English or Russian
+   without changing the configured vault path.
 
-   Повторный запуск мастера из нового ZIP обновляет только программные файлы.
-   Запущенный TermVault нужно предварительно закрыть. База и бэкапы не удаляются;
-   установка поверх чужой непустой папки и автоматический откат версии запрещены.
-   Обновление программных файлов не атомарно: при прерывании повторите мастер
-   из того же или более нового полного ZIP. Хранилище обновлением не редактируется.
-   `setup.cmd` не обходит политики PowerShell. Если скрипты запрещены, не меняйте
-   глобальные политики безопасности — используйте разрешённый способ запуска.
+   Rerunning the wizard from a newer ZIP updates program files only. Close TermVault
+   first. Vaults and backups are retained; installing over an unrelated nonempty
+   folder and automatic downgrades are refused. Program-file updates are not atomic:
+   if interrupted, rerun the wizard from the same or a newer complete ZIP. Updating
+   does not edit the vault. `setup.cmd` does not bypass PowerShell policy. If scripts
+   are blocked, use a permitted execution method rather than weakening global policy.
 
-### Удаление
+## Uninstall
 
-Откройте **Параметры Windows → Приложения → Установленные приложения → TermVault → Удалить**.
-Либо запустите `uninstall.cmd` в установленной папке. Подтвердите удаление буквой
-`y`. TermVault и ожидающие подтверждения окна браузерного заполнения нужно закрыть.
+Open **Windows Settings → Apps → Installed apps → TermVault → Uninstall**, or run
+`uninstall.cmd` from the installation folder. Confirm with `y`. Close TermVault
+and any browser-filling windows waiting for approval first.
 
-Удаляются только известные программные файлы, собственная запись в пользовательском
-PATH и принадлежащий этой установке локальный мост. Базы, резервные копии,
-настройка выбранной базы и любые посторонние файлы сохраняются, даже если они
-лежат внутри папки установки. Системный PATH и профили браузеров не меняются.
-Само расширение удалите кнопкой на странице расширений браузера. Старая установка
-без записи о владельце моста может сохранить мост для безопасности; переустановка
-с подключением браузера создаёт эту запись перед последующим удалением.
+Only known program files, the installation's user PATH entry and its owned local
+bridge are removed. Vaults, backups, saved vault preferences and unrelated files
+remain, even inside the installation folder. System PATH and browser profiles are
+not changed. Remove the extension separately on the browser's extensions page.
+An older installation without bridge ownership metadata may retain the bridge for
+safety; reinstalling with browser integration creates that metadata for later removal.
 
-### Ручной вариант без мастера
+## Manual installation without the wizard
 
-Распакуйте ZIP в постоянную папку, например `%LOCALAPPDATA%\Programs\TermVault`.
-Не загружайте расширение из временной папки: браузеру нужны его файлы постоянно.
-3. Откройте PowerShell в этой папке. Создайте **тестовое** хранилище:
+Extract the ZIP into a permanent folder, for example
+`%LOCALAPPDATA%\Programs\TermVault`. Do not load the extension from a temporary
+folder: the browser needs continued access to its files.
+
+1. Open PowerShell in that folder and create a **test** vault:
 
    ```powershell
    .\tvault.exe --create
    ```
 
-   Если хранилище уже существует, запускайте `.\tvault.exe` без `--create`.
-   Мастер-пароль вводится только в окне TermVault. Rust устанавливать не нужно.
-4. На странице расширений браузера включите режим разработчика и загрузите папку
-   `browser\extension` из распакованного ZIP. Скопируйте ID расширения.
-5. Для Яндекс Браузера выполните:
+   If the vault exists, run `.\tvault.exe` without `--create`. Enter the master
+   passphrase only in the TermVault window. Rust is not required.
+2. Enable developer mode on the browser's extensions page and load
+   `browser\extension` from the extracted ZIP. Copy the extension ID.
+3. For Yandex Browser, run:
 
    ```powershell
-   .\browser\install.ps1 -ExtensionId 'ВАШ_ID_РАСШИРЕНИЯ'
+   .\browser\install.ps1 -ExtensionId 'YOUR_EXTENSION_ID'
    ```
 
-   Для Chrome добавьте `-Browser Chrome`, для Edge — `-Browser Edge`.
-   Для нестандартного пути базы добавьте `-Vault 'C:\Vaults\personal.kdbx'`.
-   Права администратора не нужны. Не отключайте защиту браузера и не меняйте
-   глобальные политики PowerShell ради установки.
-6. У тестовой записи укажите HTTPS URL сайта, сохраните Ctrl+S. Откройте форму
-   входа, нажмите расширение, разблокируйте TermVault и подтвердите Enter → y.
+   Add `-Browser Chrome` for Chrome or `-Browser Edge` for Edge. For a non-default
+   vault path, add `-Vault 'C:\Vaults\personal.kdbx'`. Administrator privileges are
+   not required. Do not disable browser security or weaken global PowerShell policy.
+4. Give a test entry the website's HTTPS URL and save with Ctrl+S. Open the login
+   form, click the extension, unlock TermVault and approve with Enter → y.
 
-Подробности и ограничения: [README](README.md). Это неаудированный экспериментальный
-проект. Не храните в нём единственную копию реальных паролей.
+See the [browser README](README.md) for details and limitations. This is an
+experimental, unaudited project. Never keep your only copy of real passwords here.

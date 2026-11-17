@@ -50,6 +50,27 @@ impl Clipboard {
             owned: None,
         }
     }
+    #[cfg(test)]
+    pub(crate) fn memory_for_test() -> Self {
+        struct Memory(Zeroizing<String>);
+        impl Backend for Memory {
+            fn write(&mut self, text: &str) -> Result<()> {
+                self.0 = Zeroizing::new(text.to_owned());
+                Ok(())
+            }
+            fn read(&mut self) -> Result<Zeroizing<String>> {
+                Ok(self.0.clone())
+            }
+            fn clear(&mut self) -> Result<()> {
+                self.0 = Zeroizing::new(String::new());
+                Ok(())
+            }
+        }
+        Self {
+            backend: Some(Box::new(Memory(Zeroizing::new(String::new())))),
+            owned: None,
+        }
+    }
     pub fn copy(&mut self, text: &str, now: Instant) -> Result<()> {
         if self.backend.is_none() {
             self.backend = arboard::Clipboard::new()

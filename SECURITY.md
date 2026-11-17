@@ -23,6 +23,24 @@ No general plaintext exports, password CLI flags/environment/piped inputs,
 arbitrary external commands, or automatic navigation. Clipboard operations and reveal require explicit
 actions. Memory cleanup and clipboard clearing are best effort, not secure-erasure claims.
 
+## Manual maintenance commands
+
+Master-passphrase changes reauthenticate against the current encrypted revision and
+reuse verified atomic-save/backup handling. The live key is changed only after the
+new ciphertext has been committed successfully. Previous backups remain protected
+by the old passphrase. No passphrase recovery or secure-erasure claim is made.
+
+Vault removal requires reauthentication, exact filename entry and a visible final
+confirmation. Its short-lived authorization is bound to one path and ciphertext
+revision. Removal moves the active file to an encrypted backup in the same directory;
+it does not remove backups or unrelated files. Trusted parent storage/no concurrent
+writers are required, as for normal saves. Same-user filesystem attacks are not covered.
+
+Manual update checking makes one consented HTTPS request to GitHub, with a bounded
+body and timeout, and no redirects. No vault/session data is supplied to the worker.
+It never downloads/executes an update; HTTPS version information is not a replacement
+for cryptographically signed installation metadata.
+
 ## Experimental browser bridge
 
 The optional Windows extension uses Native Messaging and per-request local unlock/approval.

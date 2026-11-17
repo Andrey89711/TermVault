@@ -21,6 +21,7 @@ struct Pty {
 }
 impl Pty {
     fn start(path: &Path, create: bool) -> Self {
+        assert!(path.is_absolute());
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 34,
@@ -31,6 +32,14 @@ impl Pty {
             .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_tvault"));
         command.arg(path);
+        // ConPTY can ignore CommandBuilder.env overrides. The explicit CLI path
+        // is required: an old binary rejects the flag instead of reading real config.
+        command.arg("--settings-file");
+        command.arg(
+            path.parent()
+                .unwrap()
+                .join("isolated-settings/TermVault/settings.json"),
+        );
         if create {
             command.arg("--create");
         }
@@ -88,7 +97,7 @@ impl Pty {
             if output.contains(text) {
                 return;
             }
-            if text == "Saved." {
+            if text == "Entrysaved" {
                 for marker in [
                     "Titleisrequired",
                     "KDBXencryptionfailed",
@@ -179,17 +188,19 @@ fn real_terminal_create_edit_mask_save_lock_and_reopen() {
         term.paste(master);
         term.send(b"\r");
         term.paste(master);
-        term.action(b"\r", "Unlocked");
-        term.action(b"n", "Title");
+        term.action(b"\r", "Vaultunlocked");
+        term.action(b"\x10", "Commands"); // Ctrl+P opens the palette, not password reveal.
+        term.paste("new");
+        term.action(b"\r", "Title");
         term.paste("Demo account");
         term.send(b"\t");
         term.paste("demo@example.test");
         term.send(b"\t");
         term.paste(secret);
-        term.action(b"\x13", "Saved.");
+        term.action(b"\x13", "Entrysaved");
         term.assert_absent(master);
         term.assert_absent(secret);
-        term.action(b"\x0c", "Locked.");
+        term.action(b"\x0c", "Vaultlocked");
         term.assert_absent(secret);
         term.exit();
     }
@@ -207,8 +218,86 @@ fn real_terminal_create_edit_mask_save_lock_and_reopen() {
         term.paste("wrong master password");
         term.action(b"\r", "Cannotunlock");
         term.paste(master);
-        term.action(b"\r", "Unlocked");
+        term.action(b"\r", "Vaultunlocked");
         term.expect(0, "Demoaccount");
+        term.assert_absent(master);
+        term.assert_absent(secret);
+        term.exit();
+    }
+}
+
+#[test]
+fn real_terminal_folder_tree_and_delete_command_are_distinct_from_creation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("folders.kdbx");
+    let mut term = Pty::start(&path, true);
+    term.expect(0, "Masterpassword");
+    term.paste("dummy master phrase 123");
+    term.send(b"\r");
+    term.paste("dummy master phrase 123");
+    term.action(b"\r", "Vaultunlocked");
+    term.action(b"F", "Newfolder");
+    term.paste("Work");
+    term.action(b"\r", "Foldercreated");
+    term.expect(0, "Explorer");
+    term.action(b"n", "Title");
+    term.paste("Nested account");
+    term.action(b"\x13", "Entrysaved");
+    term.action(b"\x1b[D", "Folder"); // Left selects the parent folder.
+    term.action(b"\x10", "Commands");
+    term.paste("удаление папки");
+    term.action(b"\r", "Deletefolder?");
+    term.expect(0, "Entriestodelete:1");
+    term.send(b"\x1b");
+    term.exit();
+}
+
+#[test]
+fn real_terminal_language_choice_preserves_a_draft_and_persists_in_isolated_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("localized.kdbx");
+    let master = "dummy localized master 123";
+    let secret = "DUMMY_LOCALIZED_PASSWORD_NO_ECHO";
+    {
+        let mut term = Pty::start(&path, true);
+        term.expect(0, "Masterpassword");
+        term.paste(master);
+        term.send(b"\r");
+        term.paste(master);
+        term.action(b"\r", "Vaultunlocked");
+        term.action(b"n", "Title");
+        term.paste("Language draft unchanged");
+        term.send(b"\t\t");
+        term.paste(secret);
+        term.action(b"\x10", "Commands");
+        term.paste("language");
+        term.action(b"\r", "Русский");
+        term.action(b"\x1b[B\r", "Название");
+        term.expect(0, "Languagedraftunchanged");
+        term.action(b"\x1b", "Несохранённаязапись");
+        term.action(b"c", "Название");
+        term.action(b"\x13", "Записьсохранена");
+        term.assert_absent(master);
+        term.assert_absent(secret);
+        term.exit();
+    }
+    let config = directory
+        .path()
+        .join("isolated-settings/TermVault/settings.json");
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(config).unwrap()).unwrap();
+    assert_eq!(value["language"], "ru");
+    {
+        let mut term = Pty::start(&path, false);
+        term.expect(0, "Мастер-пароль");
+        term.paste("wrong dummy master");
+        term.action(b"\r", "Неудалосьразблокировать");
+        term.paste(master);
+        term.action(b"\r", "Хранилищеразблокировано");
+        term.expect(0, "Languagedraftunchanged");
+        term.action(b"\x10", "Команды");
+        term.paste("language");
+        term.action(b"\r", "Русский");
+        term.action(b"\x1b[A\r", "Username:");
         term.assert_absent(master);
         term.assert_absent(secret);
         term.exit();

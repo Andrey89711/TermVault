@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use keepass::{
     config::{CompressionConfig, DatabaseConfig, KdfConfig},
-    db::{fields, EntryId},
+    db::{fields, EntryId, GroupId},
     Database, DatabaseKey,
 };
 use std::{
@@ -9,6 +9,7 @@ use std::{
     fs::{self, File, Metadata},
     io::{Read, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
@@ -55,6 +56,23 @@ pub struct Session {
     key: DatabaseKey,
     revision: Vec<u8>, // Ciphertext only.
     pub readonly: bool,
+}
+
+/// Reauthentication is tied to one path/revision and expires before final confirmation.
+pub struct DeleteAuthorization {
+    path: PathBuf,
+    revision: Vec<u8>, // Ciphertext only; no master passphrase retained.
+    expires: Instant,
+}
+
+fn validate_master(password: &str) -> Result<()> {
+    if password.chars().count() < 12
+        || password.len() > 1024
+        || !crate::input::valid(password, false)
+    {
+        bail!("Use a master passphrase of at least 12 characters (maximum 1024 bytes)");
+    }
+    Ok(())
 }
 
 pub fn inspect(path: &Path) -> Result<()> {
@@ -117,12 +135,7 @@ fn config() -> DatabaseConfig {
 
 impl Session {
     pub fn create(path: &Path, password: &str) -> Result<Self> {
-        if password.chars().count() < 12
-            || password.len() > 1024
-            || !crate::input::valid(password, false)
-        {
-            bail!("Use a master passphrase of at least 12 characters (maximum 1024 bytes)");
-        }
+        validate_master(password)?;
         if !path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("kdbx"))
@@ -186,6 +199,12 @@ impl Session {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Distinguish an absent title from user text equal to a UI placeholder.
+    pub fn entry_has_title(&self, id: EntryId) -> bool {
+        self.db
+            .entry(id)
+            .is_some_and(|entry| entry.get_title().is_some())
+    }
     pub fn entries(&self) -> Vec<(EntryId, String)> {
         let mut entries: Vec<_> = self
             .db
@@ -214,7 +233,151 @@ impl Session {
             notes: Zeroizing::new(entry.get(fields::NOTES).unwrap_or("").into()),
         })
     }
+    pub fn root_folder(&self) -> GroupId {
+        self.db.root().id()
+    }
+    pub fn has_folders(&self) -> bool {
+        self.db.num_groups() > 1
+    }
+    pub fn folder_parent(&self, id: GroupId) -> Option<GroupId> {
+        self.db.group(id)?.parent().map(|parent| parent.id())
+    }
+    pub fn folder_children(&self, parent: GroupId) -> Vec<(GroupId, String)> {
+        let Some(group) = self.db.group(parent) else {
+            return Vec::new();
+        };
+        let mut children: Vec<_> = group
+            .groups()
+            .map(|child| (child.id(), crate::input::display(&child.name)))
+            .collect();
+        children.sort_by(|a, b| {
+            a.1.to_lowercase()
+                .cmp(&b.1.to_lowercase())
+                .then(a.0.to_string().cmp(&b.0.to_string()))
+        });
+        children
+    }
+    pub fn entry_folder(&self, id: EntryId) -> Option<GroupId> {
+        self.db.entry(id).map(|entry| entry.parent().id())
+    }
+    pub fn folders(&self) -> Vec<(GroupId, String)> {
+        let mut folders: Vec<_> = self
+            .db
+            .iter_all_groups()
+            .map(|group| {
+                let id = group.id();
+                let mut names = Vec::new();
+                let mut current = Some(id);
+                while let Some(current_id) = current {
+                    let group = self.db.group(current_id).expect("Known folder ID");
+                    if group.parent().is_some() {
+                        names.push(crate::input::display(&group.name));
+                    }
+                    current = group.parent().map(|parent| parent.id());
+                }
+                names.reverse();
+                (id, format!("/{}", names.join(" / ")))
+            })
+            .collect();
+        folders.sort_by(|a, b| {
+            a.1.to_lowercase()
+                .cmp(&b.1.to_lowercase())
+                .then(a.0.to_string().cmp(&b.0.to_string()))
+        });
+        folders
+    }
+    pub fn create_folder(&mut self, parent: Option<GroupId>, name: &str) -> Result<GroupId> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        let name = name.trim();
+        if name.is_empty()
+            || name.len() > 128
+            || !crate::input::valid(name, false)
+            || name.contains(['/', '\\'])
+            || matches!(name, "." | "..")
+        {
+            bail!("Folder name must contain 1–128 bytes without slashes or control characters");
+        }
+        if self.db.num_groups() >= 100 {
+            bail!("Vault limit: 100 folders including root");
+        }
+        let parent = parent.unwrap_or_else(|| self.root_folder());
+        let group = self
+            .db
+            .group(parent)
+            .context("Parent folder no longer exists")?;
+        if group
+            .groups()
+            .any(|group| group.name.to_lowercase() == name.to_lowercase())
+        {
+            bail!("A folder with this name already exists here");
+        }
+        let mut candidate = self.db.clone();
+        let id = {
+            let mut parent = candidate
+                .group_mut(parent)
+                .context("Parent folder no longer exists")?;
+            let mut group = parent.add_group();
+            group.name = name.into();
+            group.id()
+        };
+        self.commit(candidate)?;
+        Ok(id)
+    }
+    pub fn folder_contents(&self, id: GroupId) -> Option<(usize, usize)> {
+        let group = self.db.group(id)?;
+        let mut entries = group.entries().count();
+        let mut folders = 0;
+        for child in group.groups() {
+            let (child_entries, child_folders) = self.folder_contents(child.id())?;
+            entries += child_entries;
+            folders += child_folders + 1;
+        }
+        Some((entries, folders))
+    }
+    pub fn delete_folder(&mut self, id: GroupId) -> Result<GroupId> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        let parent = self
+            .db
+            .group(id)
+            .context("Folder no longer exists")?
+            .parent()
+            .context("The root folder cannot be deleted")?
+            .id();
+        let mut candidate = self.db.clone();
+        candidate
+            .group_mut(id)
+            .context("Folder no longer exists")?
+            .remove();
+        self.commit(candidate)?;
+        Ok(parent)
+    }
+    pub fn move_entry(&mut self, id: EntryId, folder: GroupId) -> Result<()> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        if self.db.group(folder).is_none() {
+            bail!("Destination folder no longer exists");
+        }
+        let mut candidate = self.db.clone();
+        candidate
+            .entry_mut(id)
+            .context("Entry no longer exists")?
+            .move_to(folder)?;
+        self.commit(candidate)
+    }
     pub fn update(&mut self, id: Option<EntryId>, data: &EntryData) -> Result<EntryId> {
+        self.update_in_folder(id, data, None)
+    }
+    pub fn update_in_folder(
+        &mut self,
+        id: Option<EntryId>,
+        data: &EntryData,
+        folder: Option<GroupId>,
+    ) -> Result<EntryId> {
         if self.readonly {
             bail!("Foreign vault is read-only in this MVP");
         }
@@ -225,7 +388,11 @@ impl Session {
         let mut candidate = self.db.clone();
         let entry_id = match id {
             Some(id) => id,
-            None => candidate.root_mut().add_entry().id(),
+            None => candidate
+                .group_mut(folder.unwrap_or_else(|| self.root_folder()))
+                .context("Folder no longer exists")?
+                .add_entry()
+                .id(),
         };
         {
             let mut entry = candidate
@@ -256,15 +423,101 @@ impl Session {
             .remove();
         self.commit(candidate)
     }
+    fn verify_master(&self, password: &str) -> Result<()> {
+        if password.len() > 1024 || !crate::input::valid(password, false) {
+            bail!("Invalid current master passphrase");
+        }
+        if read(&self.path)? != self.revision {
+            bail!("Vault changed on disk; lock and reopen it before retrying");
+        }
+        let key = DatabaseKey::new().with_password(password);
+        Database::open(&mut self.revision.as_slice(), key)
+            .map_err(|_| anyhow::anyhow!("Current master passphrase is incorrect"))?;
+        Ok(())
+    }
+    pub fn change_master(&mut self, current: &str, new: &str) -> Result<()> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        validate_master(new)?;
+        self.verify_master(current)?;
+        if current == new {
+            bail!("The new master passphrase must be different");
+        }
+        // Keep the old in-memory key until the new encrypted file has been verified and committed.
+        self.commit_with_key(self.db.clone(), DatabaseKey::new().with_password(new))
+    }
+    pub fn authorize_delete(&self, current: &str, filename: &str) -> Result<DeleteAuthorization> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        let expected = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("Vault filename cannot be confirmed in this interface")?;
+        if filename != expected {
+            bail!("The typed filename does not match the vault filename");
+        }
+        self.verify_master(current)?;
+        Ok(DeleteAuthorization {
+            path: self.path.clone(),
+            revision: self.revision.clone(),
+            expires: Instant::now() + Duration::from_secs(60),
+        })
+    }
+    pub fn remove_vault(&self, authorization: &DeleteAuthorization) -> Result<PathBuf> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        if authorization.path != self.path
+            || authorization.revision != self.revision
+            || Instant::now() >= authorization.expires
+        {
+            bail!("Delete confirmation expired or no longer matches; authenticate again");
+        }
+        if read(&self.path)? != self.revision {
+            bail!("Vault changed on disk; deletion cancelled");
+        }
+        let parent = self.path.parent().context("Missing vault parent")?;
+        for _ in 0..32 {
+            let mut random = [0u8; 12];
+            getrandom::fill(&mut random)
+                .map_err(|_| anyhow::anyhow!("System randomness unavailable"))?;
+            let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+            let backup = parent.join(format!(
+                "{}.backup-{suffix}.kdbx",
+                self.path.file_name().unwrap().to_string_lossy()
+            ));
+            match fs::symlink_metadata(&backup) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => bail!("Cannot check encrypted backup destination; deletion cancelled"),
+            }
+            if read(&self.path)? != self.revision {
+                bail!("Vault changed on disk; deletion cancelled");
+            }
+            // Remove the active filename by moving the actual ciphertext to a retained backup.
+            // Even a concurrent source replacement is preserved, not destroyed. Trusted parent
+            // storage and no concurrent writers remain required, as with normal vault saves.
+            fs::rename(&self.path, &backup)
+                .context("Cannot move vault to encrypted backup; deletion cancelled")?;
+            return Ok(backup);
+        }
+        bail!("Cannot allocate an encrypted backup name; deletion cancelled")
+    }
     fn commit(&mut self, candidate: Database) -> Result<()> {
+        self.commit_with_key(candidate, self.key.clone())
+    }
+    fn commit_with_key(&mut self, candidate: Database, key: DatabaseKey) -> Result<()> {
         if read(&self.path)? != self.revision {
             bail!("Vault changed on disk; lock and reopen it. Your draft is still in memory");
         }
-        let encrypted = encrypt(&candidate, &self.key)?;
+        let encrypted = encrypt(&candidate, &key)?;
         let parent = self.path.parent().context("Missing vault parent")?;
         let temporary = encrypted_temp(parent, &encrypted)?;
         // Verify the encrypted candidate before replacing anything.
-        let verification = Database::open(&mut encrypted.as_slice(), self.key.clone())
+        let verification = Database::open(&mut encrypted.as_slice(), key.clone())
             .map_err(|_| anyhow::anyhow!("Encrypted save verification failed"))?;
         if verification != candidate {
             bail!("Encrypted save verification failed");
@@ -292,6 +545,7 @@ impl Session {
             .map_err(|_| anyhow::anyhow!("Cannot atomically replace vault; draft retained"))?;
         self.db = candidate;
         self.revision = encrypted;
+        self.key = key;
         Ok(())
     }
 }
@@ -452,6 +706,127 @@ mod tests {
         assert!(Session::unlock(&path, MASTER).unwrap().entries().is_empty());
     }
     #[test]
+    fn nested_folders_and_entry_moves_survive_reopen_without_losing_fields() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("folders.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let work = vault.create_folder(None, "Работа").unwrap();
+        let mail = vault.create_folder(Some(work), "Почта").unwrap();
+        let id = vault.update_in_folder(None, &data(), Some(mail)).unwrap();
+        assert_eq!(vault.entry_folder(id), Some(mail));
+        vault.update(Some(id), &data()).unwrap();
+        assert_eq!(vault.entry_folder(id), Some(mail));
+        let reopened = Session::unlock(&path, MASTER).unwrap();
+        assert!(reopened
+            .folders()
+            .contains(&(mail, "/Работа / Почта".into())));
+        assert_eq!(reopened.entry_folder(id), Some(mail));
+        assert_eq!(
+            &*reopened.entry(id).unwrap().password,
+            "UNIQUE_PASSWORD_NOT_PLAINTEXT"
+        );
+        let before_move = read(&path).unwrap();
+        vault.move_entry(id, vault.root_folder()).unwrap();
+        let reopened = Session::unlock(&path, MASTER).unwrap();
+        assert_eq!(reopened.entry_folder(id), Some(reopened.root_folder()));
+        assert_eq!(reopened.entries().len(), 1);
+        let backup = fs::read_dir(root.path())
+            .unwrap()
+            .map(|item| item.unwrap().path())
+            .find(|candidate| candidate != &path && fs::read(candidate).unwrap() == before_move)
+            .unwrap();
+        assert_eq!(
+            Session::unlock(&backup, MASTER).unwrap().entry_folder(id),
+            Some(mail)
+        );
+        for secret in ["Работа", "Почта", "UNIQUE_PASSWORD_NOT_PLAINTEXT"] {
+            assert!(!read(&path)
+                .unwrap()
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()));
+        }
+    }
+    #[test]
+    fn folder_deletion_removes_only_its_subtree_and_retains_recoverable_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("folders.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let folder = vault.create_folder(None, "Delete me").unwrap();
+        let nested = vault.create_folder(Some(folder), "Nested").unwrap();
+        let direct = vault.update_in_folder(None, &data(), Some(folder)).unwrap();
+        let child = vault.update_in_folder(None, &data(), Some(nested)).unwrap();
+        let retained = vault.update(None, &data()).unwrap();
+        assert_eq!(vault.folder_contents(folder), Some((2, 1)));
+        let before = read(&path).unwrap();
+        assert_eq!(vault.delete_folder(folder).unwrap(), vault.root_folder());
+        let reopened = Session::unlock(&path, MASTER).unwrap();
+        assert!(reopened.entry(direct).is_none());
+        assert!(reopened.entry(child).is_none());
+        assert!(reopened.folder_contents(folder).is_none());
+        assert!(reopened.folder_contents(nested).is_none());
+        assert!(reopened.entry(retained).is_some());
+        let backup = fs::read_dir(root.path())
+            .unwrap()
+            .map(|item| item.unwrap().path())
+            .find(|candidate| candidate != &path && fs::read(candidate).unwrap() == before)
+            .unwrap();
+        let restored = Session::unlock(&backup, MASTER).unwrap();
+        assert_eq!(restored.folder_contents(folder), Some((2, 1)));
+        assert!(restored.entry(direct).is_some());
+        assert!(restored.entry(child).is_some());
+    }
+
+    #[test]
+    fn folder_deletion_rejects_root_readonly_and_external_conflicts() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("folders.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let folder = vault.create_folder(None, "Empty").unwrap();
+        let before = read(&path).unwrap();
+        assert!(vault.delete_folder(vault.root_folder()).is_err());
+        vault.readonly = true;
+        assert!(vault.delete_folder(folder).is_err());
+        assert_eq!(read(&path).unwrap(), before);
+        vault.readonly = false;
+        let mut other = Session::unlock(&path, MASTER).unwrap();
+        other.update_in_folder(None, &data(), Some(folder)).unwrap();
+        let changed = read(&path).unwrap();
+        assert!(vault.delete_folder(folder).is_err());
+        assert_eq!(read(&path).unwrap(), changed);
+        assert_eq!(vault.folder_contents(folder), Some((0, 0)));
+        let mut reopened = Session::unlock(&path, MASTER).unwrap();
+        let empty = reopened.create_folder(None, "Truly empty").unwrap();
+        reopened.delete_folder(empty).unwrap();
+        assert!(reopened.folder_contents(empty).is_none());
+    }
+
+    #[test]
+    fn folder_validation_readonly_and_external_conflicts_do_not_modify_the_vault() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("folders.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let folder = vault.create_folder(None, "Work").unwrap();
+        let id = vault.update(None, &data()).unwrap();
+        let before = read(&path).unwrap();
+        for name in ["", "  ", ".", "..", "a/b", "a\\b", "a\nb", "WORK"] {
+            assert!(vault.create_folder(None, name).is_err());
+            assert_eq!(read(&path).unwrap(), before);
+        }
+        assert!(vault.create_folder(None, &"x".repeat(129)).is_err());
+        vault.readonly = true;
+        assert!(vault.create_folder(None, "Private").is_err());
+        assert!(vault.move_entry(id, folder).is_err());
+        assert_eq!(read(&path).unwrap(), before);
+        vault.readonly = false;
+        let mut other = Session::unlock(&path, MASTER).unwrap();
+        other.create_folder(None, "Other").unwrap();
+        let changed = read(&path).unwrap();
+        assert!(vault.create_folder(None, "Stale").is_err());
+        assert!(vault.move_entry(id, folder).is_err());
+        assert_eq!(vault.entry_folder(id), Some(vault.root_folder()));
+        assert_eq!(read(&path).unwrap(), changed);
+    }
+    #[test]
     fn external_conflict_is_not_overwritten_and_session_is_unchanged() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("test.kdbx");
@@ -487,6 +862,30 @@ mod tests {
         let mut vault = Session::unlock(&path, MASTER).unwrap();
         assert!(vault.readonly);
         assert!(vault.update(None, &data()).is_err());
+    }
+    #[test]
+    fn title_presence_distinguishes_missing_metadata_from_literal_placeholder_text() {
+        let root = tempfile::tempdir().unwrap();
+        let mut vault = Session::create(&root.path().join("titles.kdbx"), MASTER).unwrap();
+        let missing = vault.db.root_mut().add_entry().id();
+        let literal = vault.db.root_mut().add_entry().id();
+        vault
+            .db
+            .entry_mut(literal)
+            .unwrap()
+            .set_protected(fields::TITLE, "Untitled");
+        assert!(!vault.entry_has_title(missing));
+        assert!(vault.entry_has_title(literal));
+        // Storage never translates either entry; only UI-generated fallback text
+        // uses the presence bit, not a lookup on the user's authored title.
+        assert_eq!(
+            vault
+                .entries()
+                .iter()
+                .filter(|(_, title)| title == "Untitled")
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -530,5 +929,122 @@ mod tests {
         bytes[last] ^= 0x80;
         fs::write(&path, &bytes).unwrap();
         assert!(Session::unlock(&path, MASTER).is_err());
+    }
+    #[test]
+    fn master_change_reopens_with_new_key_preserves_records_and_keeps_old_encrypted_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rotate.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let id = vault.update(None, &data()).unwrap();
+        let before = read(&path).unwrap();
+        let new = "different master passphrase";
+        vault.change_master(MASTER, new).unwrap();
+        assert!(Session::unlock(&path, MASTER).is_err());
+        let reopened = Session::unlock(&path, new).unwrap();
+        assert_eq!(
+            &*reopened.entry(id).unwrap().password,
+            "UNIQUE_PASSWORD_NOT_PLAINTEXT"
+        );
+        let backup = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|candidate| candidate != &path && fs::read(candidate).unwrap() == before)
+            .unwrap();
+        assert!(Session::unlock(&backup, MASTER).is_ok());
+        assert!(Session::unlock(&backup, new).is_err());
+        vault.update(Some(id), &data()).unwrap(); // The live session must also use the NEW key.
+        assert!(Session::unlock(&path, new).is_ok());
+        assert!(Session::unlock(&path, MASTER).is_err());
+        let bytes = read(&path).unwrap();
+        for secret in [MASTER, new, "UNIQUE_PASSWORD_NOT_PLAINTEXT"] {
+            assert!(!bytes
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()));
+        }
+    }
+    #[test]
+    fn failed_master_changes_and_readonly_actions_never_modify_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let before = read(&path).unwrap();
+        for (current, new) in [
+            ("incorrect", "different master passphrase"),
+            (MASTER, "short"),
+            (MASTER, MASTER),
+        ] {
+            assert!(vault.change_master(current, new).is_err());
+            assert_eq!(read(&path).unwrap(), before);
+            assert_eq!(vault.revision, before);
+        }
+        vault.readonly = true;
+        assert!(vault
+            .change_master(MASTER, "different master passphrase")
+            .is_err());
+        assert!(vault.authorize_delete(MASTER, "test.kdbx").is_err());
+        assert_eq!(read(&path).unwrap(), before);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn master_change_refuses_external_modifications() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.kdbx");
+        let mut stale = Session::create(&path, MASTER).unwrap();
+        let mut other = Session::unlock(&path, MASTER).unwrap();
+        other.update(None, &data()).unwrap();
+        let before = read(&path).unwrap();
+        assert!(stale
+            .change_master(MASTER, "different master passphrase")
+            .is_err());
+        assert_eq!(read(&path).unwrap(), before);
+        assert!(Session::unlock(&path, MASTER).is_ok());
+    }
+    #[test]
+    fn deletion_requires_current_master_exact_filename_and_a_fresh_bound_authorization() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.kdbx");
+        let vault = Session::create(&path, MASTER).unwrap();
+        let other_path = root.path().join("other.kdbx");
+        let other = Session::create(&other_path, MASTER).unwrap();
+        let before = read(&path).unwrap();
+        assert!(vault.authorize_delete("wrong", "test.kdbx").is_err());
+        assert!(vault.authorize_delete(MASTER, "TEST.kdbx").is_err());
+        let mut authorization = vault.authorize_delete(MASTER, "test.kdbx").unwrap();
+        assert!(other.remove_vault(&authorization).is_err());
+        authorization.expires = Instant::now() - Duration::from_secs(1);
+        assert!(vault.remove_vault(&authorization).is_err());
+        assert_eq!(read(&path).unwrap(), before);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+    #[test]
+    fn deletion_preserves_exact_ciphertext_and_unrelated_files_and_cannot_be_replayed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        vault.update(None, &data()).unwrap();
+        let before = read(&path).unwrap();
+        let unrelated = root.path().join("do-not-touch.txt");
+        fs::write(&unrelated, "KEEP").unwrap();
+        let count = fs::read_dir(root.path()).unwrap().count();
+        let authorization = vault.authorize_delete(MASTER, "test.kdbx").unwrap();
+        let backup = vault.remove_vault(&authorization).unwrap();
+        assert!(!path.exists());
+        assert_eq!(read(&backup).unwrap(), before);
+        assert_eq!(Session::unlock(&backup, MASTER).unwrap().entries().len(), 1);
+        assert_eq!(fs::read_to_string(&unrelated).unwrap(), "KEEP");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), count);
+        assert!(vault.remove_vault(&authorization).is_err());
+    }
+    #[test]
+    fn deletion_refuses_a_file_changed_after_reauthentication() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.kdbx");
+        let vault = Session::create(&path, MASTER).unwrap();
+        let authorization = vault.authorize_delete(MASTER, "test.kdbx").unwrap();
+        let mut other = Session::unlock(&path, MASTER).unwrap();
+        other.update(None, &data()).unwrap();
+        let before = read(&path).unwrap();
+        assert!(vault.remove_vault(&authorization).is_err());
+        assert_eq!(read(&path).unwrap(), before);
     }
 }

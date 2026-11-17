@@ -61,19 +61,29 @@ function Get-TermVaultDefaultVault {
     $info = Get-Item -LiteralPath $SettingsPath
     if ($info.PSIsContainer -or $info.Length -gt 8192 -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid TermVault settings file.' }
     $settings = Get-Content -Raw -Encoding UTF8 -LiteralPath $SettingsPath | ConvertFrom-Json
-    if (@($settings.PSObject.Properties.Name).Count -ne 1 -or !$settings.vault -or ![IO.Path]::IsPathRooted($settings.vault) -or [IO.Path]::GetExtension($settings.vault) -ine '.kdbx') { throw 'Invalid TermVault default vault setting.' }
-    [string]$settings.vault
+    if ($settings -isnot [pscustomobject]) { throw 'Invalid TermVault settings object.' }
+    $language = $settings.PSObject.Properties['language']
+    if ($null -ne $language -and ($language.Value -isnot [string] -or $language.Value -cnotin @('en', 'ru'))) { throw 'Invalid TermVault language setting.' }
+    $vault = $settings.PSObject.Properties['vault']
+    if ($null -eq $vault -and $null -ne $language) { return (Join-Path (Split-Path $SettingsPath -Parent) 'vault.kdbx') }
+    if ($null -eq $vault -or $vault.Value -isnot [string] -or ![IO.Path]::IsPathRooted($vault.Value) -or [IO.Path]::GetExtension($vault.Value) -ine '.kdbx') { throw 'Invalid TermVault default vault setting.' }
+    [string]$vault.Value
 }
 
 function Set-TermVaultDefaultVault {
     param([Parameter(Mandatory = $true)][string]$Vault, [string]$SettingsPath = (Join-Path $env:LOCALAPPDATA 'TermVault\settings.json'))
     if (![IO.Path]::IsPathRooted($Vault) -or [IO.Path]::GetExtension($Vault) -ine '.kdbx') { throw 'Default vault must be an absolute .kdbx path.' }
-    if (Test-Path -LiteralPath $SettingsPath) { $null = Get-TermVaultDefaultVault -SettingsPath $SettingsPath }
+    $settings = [pscustomobject]@{}
+    if (Test-Path -LiteralPath $SettingsPath) {
+        $null = Get-TermVaultDefaultVault -SettingsPath $SettingsPath
+        $settings = Get-Content -Raw -Encoding UTF8 -LiteralPath $SettingsPath | ConvertFrom-Json
+    }
+    $settings | Add-Member -NotePropertyName vault -NotePropertyValue $Vault -Force
     $parent = Split-Path $SettingsPath -Parent
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
     $temporary = Join-Path $parent ('.settings-' + [guid]::NewGuid().ToString('N') + '.tmp')
     try {
-        [IO.File]::WriteAllText($temporary, (@{ vault = $Vault } | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText($temporary, ($settings | ConvertTo-Json -Depth 100 -WarningAction Stop), (New-Object Text.UTF8Encoding($false)))
         if (Test-Path -LiteralPath $SettingsPath) { [IO.File]::Replace($temporary, $SettingsPath, [NullString]::Value) }
         else { [IO.File]::Move($temporary, $SettingsPath) }
     } finally {

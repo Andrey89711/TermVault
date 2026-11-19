@@ -25,6 +25,8 @@ pub(super) struct RenderFeedback {
     pub sensitive_visible: Cell<bool>,
     pub vault_delete_visible: Cell<bool>,
     pub update_consent_visible: Cell<bool>,
+    pub csv_visible: Cell<bool>,
+    pub install_visible: Cell<bool>,
 }
 
 impl RenderFeedback {
@@ -39,6 +41,8 @@ impl RenderFeedback {
         self.sensitive_visible.set(false);
         self.vault_delete_visible.set(false);
         self.update_consent_visible.set(false);
+        self.csv_visible.set(false);
+        self.install_visible.set(false);
     }
 }
 
@@ -372,6 +376,14 @@ impl App {
         // Dialogs are rendered afterward: a toast must never obscure approval or discard prompts.
         self.draw_notice(frame);
         match self.runtime.mode {
+            Mode::Csv => {
+                let visible = self.draw_full_consent(frame, &self.csv_text(), self.tr(" CSV transfer ", " Перенос CSV "));
+                self.render.csv_visible.set(visible);
+            }
+            Mode::UpdateDownload | Mode::UpdateInstall => {
+                let visible = self.draw_full_consent(frame, &self.install_text(), self.tr(" Update ", " Обновление "));
+                self.render.install_visible.set(visible);
+            }
             Mode::DeleteFolder => self.draw_folder_delete(frame),
             Mode::NewFolder => {
                 let parent = if self.runtime.folder.is_some() { self.folder_label() } else { "/".into() };
@@ -402,6 +414,32 @@ impl App {
         }
         self.draw_palette(frame);
         self.draw_language(frame);
+    }
+
+    fn draw_full_consent(&self, frame: &mut Frame, text: &str, title: &str) -> bool {
+        let area = frame.area();
+        let width = area.width.saturating_sub(4).min(100);
+        let lines = wrap_plain_text(text, usize::from(width.saturating_sub(2)));
+        if width < 40 || lines.len() + 2 > usize::from(area.height.saturating_sub(4)) {
+            popup(frame, self.tr("Full paths and warnings do not fit.\nEnlarge the terminal to continue.\n[Esc] Cancel", "Полные пути и предупреждения не помещаются.\nУвеличьте окно для продолжения.\n[Esc] Отмена"), title, 8);
+            return false;
+        }
+        let height = lines.len() as u16 + 2;
+        let rect = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        dim_backdrop(frame);
+        frame.render_widget(Clear, rect);
+        frame.render_widget(
+            Paragraph::new(lines.into_iter().map(Line::from).collect::<Vec<_>>())
+                .block(panel(title))
+                .style(theme::surface().fg(theme::WARNING)),
+            rect,
+        );
+        true
     }
 
     fn field_label(&self, index: usize) -> &'static str {

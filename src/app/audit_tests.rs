@@ -193,6 +193,9 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
                 | Mode::VaultDeleteConfirm
                 | Mode::UpdateConsent
                 | Mode::UpdateResult
+                | Mode::Csv
+                | Mode::UpdateDownload
+                | Mode::UpdateInstall
                 | Mode::NewFolder
                 | Mode::DeleteFolder
                 | Mode::Folders(_)
@@ -241,6 +244,14 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
                     commands.push(Command::MoveToFolder);
                 }
                 commands.extend([Command::ChangeMaster, Command::DeleteVault]);
+                if app.runtime.form.is_none() {
+                    commands.extend([Command::ImportCsv, Command::ExportCsv]);
+                }
+            }
+            if app.runtime.form.is_none()
+                && matches!(app.update_result, Some(UpdateStatus::Available(_)))
+            {
+                commands.push(Command::InstallUpdate);
             }
         }
         Mode::Edit if app.runtime.form.is_some() => {
@@ -281,6 +292,9 @@ fn every_command_matches_legacy_palette_membership_and_order_across_contexts() {
         Command::SaveEntry,
         Command::GeneratePassword,
         Command::Back,
+        Command::ImportCsv,
+        Command::ExportCsv,
+        Command::InstallUpdate,
         Command::CheckUpdates,
         Command::UpdateResult,
         Command::ChangeMaster,
@@ -302,6 +316,9 @@ fn every_command_matches_legacy_palette_membership_and_order_across_contexts() {
         Mode::VaultDeleted,
         Mode::UpdateConsent,
         Mode::UpdateResult,
+        Mode::Csv,
+        Mode::UpdateDownload,
+        Mode::UpdateInstall,
         Mode::NewFolder,
         Mode::DeleteFolder,
         Mode::Folders(false),

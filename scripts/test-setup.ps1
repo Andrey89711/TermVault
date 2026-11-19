@@ -12,6 +12,8 @@ try {
     $binary = Install-TermVaultPayload -SourceRoot $repo -BinaryPath $BinaryPath -Destination $destination
     $destination = Split-Path $binary -Parent
     if (!(Test-Path -LiteralPath $binary)) { throw 'Missing installed executable.' }
+    $ownership = Get-Content -Raw -LiteralPath (Join-Path $destination '.termvault-install.json') | ConvertFrom-Json
+    if ($ownership.payload_layout -ne 2) { throw 'Installer must record the current owned payload layout for in-app updates.' }
     if (!(Test-Path -LiteralPath (Join-Path $destination 'browser/extension/options.html'))) { throw 'Missing extension diagnostics.' }
     $dummyVault = Join-Path $destination 'preserve.kdbx'
     [IO.File]::WriteAllText($dummyVault, 'DUMMY CIPHERTEXT - never delete during update')

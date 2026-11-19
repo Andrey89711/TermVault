@@ -19,8 +19,9 @@ Atomic replacement, encrypted backups, and optimistic conflict detection reduce 
 loss but do not eliminate filesystem races, power-loss risks, or dependency bugs.
 
 Manual dirty exits require confirmation. Auto-lock intentionally discards unsaved drafts.
-No general plaintext exports, password CLI flags/environment/piped inputs,
-arbitrary external commands, or automatic navigation. Clipboard operations and reveal require explicit
+No password CLI flags/environment/piped inputs, arbitrary external commands, or
+automatic navigation. CSV export is an explicit, reauthenticated plaintext
+disclosure, not an encrypted backup. Clipboard operations and reveal require explicit
 actions. Memory cleanup and clipboard clearing are best effort, not secure-erasure claims.
 
 ## Manual maintenance commands
@@ -36,10 +37,23 @@ revision. Removal moves the active file to an encrypted backup in the same direc
 it does not remove backups or unrelated files. Trusted parent storage/no concurrent
 writers are required, as for normal saves. Same-user filesystem attacks are not covered.
 
-Manual update checking makes one consented HTTPS request to GitHub, with a bounded
-body and timeout, and no redirects. No vault/session data is supplied to the worker.
-It never downloads/executes an update; HTTPS version information is not a replacement
-for cryptographically signed installation metadata.
+Update checking and package downloading require explicit consent and bounded HTTPS
+requests to the official repository and permitted release-asset hosts. No vault/session
+data is supplied to the worker. Downloaded archives must match the published checksum
+and strict payload allowlist before staging. Installation requires a separate visible
+confirmation; program-file replacement must not include vaults, backups or settings.
+Packages and their checksums are hosted together and are unsigned: they cannot defend
+against a compromised publisher/repository. This is not cryptographically signed update
+authorization. Updates run with the current user's permissions, not administrator rights.
+
+CSV import validates the complete bounded file before a single encrypted transaction.
+It appends records and retains an encrypted pre-import backup; it never silently merges
+or overwrites records. CSV export requires the current master passphrase and creates
+a new plaintext file without overwriting existing files. Treat both imported and
+exported CSV as exposed credentials. Do not use shared/cloud-sync directories.
+Formula-like values are preserved for password round-tripping and may execute when
+opened in spreadsheet software. Filesystem permissions, zeroizing buffers and deletion
+cannot guarantee secure erasure of plaintext, paging, library copies or storage remnants.
 
 ## Experimental browser bridge
 

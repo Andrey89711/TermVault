@@ -31,7 +31,7 @@ pub struct EntryData {
 }
 
 impl EntryData {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.title.trim().is_empty() || self.title.len() > 256 {
             bail!("Title is required (maximum 256 bytes)");
         }
@@ -422,6 +422,77 @@ impl Session {
             .context("Entry no longer exists")?
             .remove();
         self.commit(candidate)
+    }
+    /// Append only; a failed validation/save leaves the live database unchanged.
+    pub fn import_csv(
+        &mut self,
+        preview: &crate::csv_transfer::ImportPreview,
+        folder: Option<GroupId>,
+    ) -> Result<Vec<EntryId>> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        crate::csv_transfer::check_ancestors(&self.path)?;
+        if self.db.num_entries().saturating_add(preview.len()) > 2000 {
+            bail!("Vault limit: 2000 entries");
+        }
+        let folder = folder.unwrap_or_else(|| self.root_folder());
+        if self.db.group(folder).is_none() {
+            bail!("Folder no longer exists");
+        }
+        for (index, data) in preview.entries.iter().enumerate() {
+            data.validate()
+                .map_err(|_| anyhow::anyhow!("Invalid CSV fields at row {}", index + 2))?;
+        }
+        if preview.is_empty() {
+            if read(&self.path)? != self.revision {
+                bail!("Vault changed on disk; lock and reopen it");
+            }
+            return Ok(Vec::new());
+        }
+        let mut candidate = self.db.clone();
+        let mut ids = Vec::with_capacity(preview.len());
+        for data in &preview.entries {
+            let id = candidate
+                .group_mut(folder)
+                .context("Folder no longer exists")?
+                .add_entry()
+                .id();
+            let mut entry = candidate.entry_mut(id).context("Entry no longer exists")?;
+            for (field, value) in [
+                (fields::TITLE, &*data.title),
+                (fields::USERNAME, &*data.username),
+                (fields::PASSWORD, &*data.password),
+                (fields::URL, &*data.url),
+                (fields::NOTES, &*data.notes),
+            ] {
+                entry.set_protected(field, value.to_owned());
+            }
+            ids.push(id);
+        }
+        self.commit(candidate)?;
+        Ok(ids)
+    }
+    /// Plaintext export, deliberately requiring the current master even when unlocked.
+    pub fn export_csv(&self, path: &Path, master: &str) -> Result<usize> {
+        if self.readonly {
+            bail!("Foreign vault is read-only");
+        }
+        crate::csv_transfer::check_ancestors(&self.path)?;
+        self.verify_master(master).map_err(|_| {
+            anyhow::anyhow!("Cannot export: current master is incorrect or vault changed")
+        })?;
+        let mut ids: Vec<_> = self.db.iter_all_entries().map(|entry| entry.id()).collect();
+        ids.sort_by_key(|id| id.to_string());
+        let bytes = crate::csv_transfer::encode(ids.iter().filter_map(|id| self.entry(*id)))?;
+        // Recheck after encoding and before creating any plaintext file.
+        if read(&self.path).map_err(|_| anyhow::anyhow!("Cannot verify current vault"))?
+            != self.revision
+        {
+            bail!("Vault changed on disk; export cancelled");
+        }
+        crate::csv_transfer::persist_export(path, &bytes)?;
+        Ok(ids.len())
     }
     fn verify_master(&self, password: &str) -> Result<()> {
         if password.len() > 1024 || !crate::input::valid(password, false) {

@@ -2,6 +2,7 @@ mod app;
 mod browser;
 mod clipboard;
 mod commands;
+mod csv_transfer;
 mod i18n;
 mod input;
 mod sensitive;
@@ -78,7 +79,8 @@ fn run() -> Result<()> {
     if let Some(origin) = &cli.browser_approve {
         return browser::approve(path(&cli)?, origin);
     }
-    // No password flags, environment variables, redirected input, or plaintext exports.
+    // No password flags, environment variables or redirected secret input.
+    // Plaintext CSV export requires masked reauthentication and visible in-app consent.
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("An interactive terminal is required. Master passwords are entered only in the masked UI.");
     }

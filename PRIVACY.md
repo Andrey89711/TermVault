@@ -1,6 +1,6 @@
 # TermVault browser extension privacy policy
 
-Last updated: 2026-11-16
+Last updated: 2026-11-19
 
 This policy covers the TermVault browser extension and its communication with the
 separately installed local TermVault application. TermVault is an experimental,
@@ -46,13 +46,22 @@ configuration. Those files remain under your control on your computer.
 
 ## Local application maintenance
 
-The standalone terminal application also offers a manual **Check updates** command.
-Only after a separate consent dialog, it requests public release metadata from
-`api.github.com`. GitHub receives your IP address and a `TermVault/<version>`
-User-Agent; no vault contents, credentials, vault paths or current website are sent.
-There are no scheduled checks, automatic downloads or installations. The extension
-and browser bridge do not initiate this request. GitHub handles request metadata
-under its own privacy policy.
+The standalone terminal application offers user-initiated update checking,
+downloading and installation. After consent, it requests public release metadata
+from `api.github.com`; download consent also permits requests to GitHub and its
+approved release-asset host. GitHub receives your IP address and a
+`TermVault/<version>` User-Agent; no vault contents, credentials, vault paths or
+current website are sent. There are no startup/scheduled checks or unattended
+downloads/installations. Installation requires separate explicit approval.
+The extension and browser bridge do not initiate these requests. GitHub handles
+request metadata under its own privacy policy.
+
+CSV import/export is local and does not send the file or its contents to GitHub
+or the developer. Export deliberately writes all exported fields, including
+passwords, to an unencrypted file you select after reauthentication and confirmation.
+That file may be accessible to other local software or uploaded by third-party
+sync/backup software monitoring its directory. It is not automatically removed
+when the vault locks or the application is uninstalled. Manage it as exposed secrets.
 
 Changing the master passphrase does not re-encrypt existing backups: those still
 require the old passphrase. The terminal's vault-removal command moves the active

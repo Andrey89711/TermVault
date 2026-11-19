@@ -24,6 +24,9 @@ pub enum Command {
     SaveEntry,
     GeneratePassword,
     Back,
+    ImportCsv,
+    ExportCsv,
+    InstallUpdate,
     CheckUpdates,
     UpdateResult,
     ChangeMaster,
@@ -39,8 +42,12 @@ impl Command {
             Self::NewFolder | Self::OpenFolder | Self::MoveToFolder | Self::DeleteFolder => {
                 language.text("Folders", "Папки")
             }
-            Self::ChangeMaster | Self::DeleteVault => language.text("Vault", "Хранилище"),
-            Self::CheckUpdates | Self::UpdateResult => language.text("Updates", "Обновления"),
+            Self::ChangeMaster | Self::DeleteVault | Self::ImportCsv | Self::ExportCsv => {
+                language.text("Vault", "Хранилище")
+            }
+            Self::CheckUpdates | Self::UpdateResult | Self::InstallUpdate => {
+                language.text("Updates", "Обновления")
+            }
             Self::Unlock | Self::Lock | Self::Quit => language.text("Session", "Сеанс"),
             _ => language.text("Entries", "Записи"),
         }
@@ -78,6 +85,14 @@ impl Command {
             Self::SaveEntry => language.text("Save entry", "Сохранить запись"),
             Self::GeneratePassword => language.text("Generate password", "Сгенерировать пароль"),
             Self::Back => language.text("Return to list", "Вернуться к списку"),
+            Self::ImportCsv => language.text("Import CSV (append)", "Импорт CSV (добавить)"),
+            Self::ExportCsv => {
+                language.text("Export CSV (plaintext)", "Экспорт CSV (открытый текст)")
+            }
+            Self::InstallUpdate => language.text(
+                "Download and install update",
+                "Скачать и установить обновление",
+            ),
             Self::CheckUpdates => language.text("Check for updates", "Проверить обновления"),
             Self::UpdateResult => {
                 language.text("Update check result", "Результат проверки обновлений")
@@ -110,7 +125,13 @@ impl Command {
             Self::SaveEntry => "Ctrl+S",
             Self::GeneratePassword => "Ctrl+G",
             Self::Back => "Esc",
-            Self::CheckUpdates | Self::UpdateResult | Self::ChangeMaster | Self::DeleteVault => "",
+            Self::CheckUpdates
+            | Self::UpdateResult
+            | Self::ChangeMaster
+            | Self::DeleteVault
+            | Self::ImportCsv
+            | Self::ExportCsv
+            | Self::InstallUpdate => "",
             Self::Lock => "Ctrl+L",
             Self::Quit => "Ctrl+Q",
         }
@@ -136,6 +157,9 @@ impl Command {
             Self::SaveEntry => "save сохранить",
             Self::GeneratePassword => "generate random password генератор случайный",
             Self::Back => "back cancel return назад отмена",
+            Self::ImportCsv => "import csv append импорт добавить",
+            Self::ExportCsv => "export csv plaintext экспорт",
+            Self::InstallUpdate => "download install update скачать установить обновление",
             Self::CheckUpdates => "check updates version обновить проверка версия",
             Self::UpdateResult => "update result release версия результат релиз",
             Self::ChangeMaster => "change master password смена мастер пароль",

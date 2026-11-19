@@ -44,6 +44,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-launchers.ps1
+      - name: Test isolated in-app update and rollback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-update-apply.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/test-update-apply.ps1
       - name: Test Windows uninstallation with isolated files and registry
         if: runner.os == 'Windows'
         shell: pwsh

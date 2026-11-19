@@ -20,6 +20,9 @@ const PALETTE_ORDER: &[Command] = &[
     Command::MoveToFolder,
     Command::ChangeMaster,
     Command::DeleteVault,
+    Command::ImportCsv,
+    Command::ExportCsv,
+    Command::InstallUpdate,
     Command::Back,
     Command::Unlock,
     Command::Language,
@@ -65,6 +68,9 @@ impl App {
                     | Mode::VaultDeleteConfirm
                     | Mode::UpdateConsent
                     | Mode::UpdateResult
+                    | Mode::Csv
+                    | Mode::UpdateDownload
+                    | Mode::UpdateInstall
                     | Mode::NewFolder
                     | Mode::DeleteFolder
                     | Mode::Folders(_)
@@ -85,6 +91,11 @@ impl App {
         let browsing = self.runtime.mode == Mode::Browse;
         let editing = self.runtime.mode == Mode::Edit && self.runtime.form.is_some();
         match command {
+            Command::InstallUpdate => {
+                browsing
+                    && self.runtime.form.is_none()
+                    && matches!(self.update_result, Some(UpdateStatus::Available(_)))
+            }
             Command::Language | Command::CheckUpdates | Command::Lock | Command::Quit => true,
             Command::UpdateResult => self.update_result.is_some(),
             Command::Unlock => false,
@@ -100,6 +111,9 @@ impl App {
             | Command::NewFolder
             | Command::ChangeMaster
             | Command::DeleteVault => browsing && !session.readonly,
+            Command::ImportCsv | Command::ExportCsv => {
+                browsing && !session.readonly && self.runtime.form.is_none()
+            }
             Command::EditEntry | Command::DeleteEntry | Command::MoveToFolder => {
                 browsing && !session.readonly && self.selected_id().is_some()
             }

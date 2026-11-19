@@ -93,7 +93,7 @@ function Set-TermVaultDefaultVault {
 
 function Get-TermVaultPayloadFiles {
     @(
-        'LICENSE', 'README.md', 'SECURITY.md', 'PRIVACY.md', 'CHANGELOG.md', 'docs/RELEASING.md', 'docs/STORE-PUBLISHING.ru.md',
+        'LICENSE', 'README.md', 'SECURITY.md', 'PRIVACY.md', 'CHANGELOG.md', 'docs/RELEASING.md', 'docs/STORE-PUBLISHING.ru.md', 'docs/CSV.md',
         'setup.ps1', 'setup.cmd', 'uninstall.ps1', 'uninstall.cmd', 'scripts/setup-common.ps1', 'scripts/uninstall-common.ps1',
         'browser/README.md', 'browser/QUICKSTART.ru.md', 'browser/install.ps1', 'browser/uninstall.ps1',
         'browser/extension/manifest.json', 'browser/extension/background.js',
@@ -173,7 +173,7 @@ function Install-TermVaultPayload {
             New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
             Copy-Item -LiteralPath (Join-Path $stage $relative) -Destination $target -Force
         }
-        $marker = @{ product = 'TermVault'; schema = 1; version = $version } | ConvertTo-Json
+        $marker = @{ product = 'TermVault'; schema = 1; version = $version; payload_layout = 2 } | ConvertTo-Json
         [IO.File]::WriteAllText($markerPath, $marker, (New-Object Text.UTF8Encoding($false)))
     } finally {
         Remove-Item -LiteralPath $stage -Recurse -Force

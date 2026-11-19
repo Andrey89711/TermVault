@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3
+
+- User-consented Windows in-app update download, package verification and separate
+  installation approval; owned payload/browser-host replacement with rollback.
+- CSV import of title, username, password, URL and notes in one validated append
+  transaction, retaining an encrypted backup.
+- Explicit plaintext CSV export with current-master reauthentication, complete
+  disclosure warning and private, no-clobber file creation.
+- Lifecycle, archive-validation, legacy-layout addition and rollback regression tests.
+
 ## 0.1.2 — 2026-11-19
 
 - Accept AltGr text such as `@` in login and other input fields without treating

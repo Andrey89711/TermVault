@@ -25,6 +25,9 @@ pub(super) struct RuntimeState {
     pub deleted_backup: Option<PathBuf>,
     pub update_rx: Option<Receiver<updates::CheckResult>>,
     pub update_return: Option<Mode>,
+    pub csv: Option<transfer::CsvForm>,
+    pub download_rx: Option<Receiver<updates::DownloadResult>>,
+    pub staged_update: Option<updates::StagedUpdate>,
     pub reveal_until: Option<Instant>,
 }
 
@@ -53,6 +56,9 @@ impl Default for RuntimeState {
             deleted_backup: None,
             update_rx: None,
             update_return: None,
+            csv: None,
+            download_rx: None,
+            staged_update: None,
             reveal_until: None,
         }
     }

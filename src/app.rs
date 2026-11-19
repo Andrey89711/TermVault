@@ -32,6 +32,8 @@ use zeroize::{Zeroize, Zeroizing};
 mod policy;
 mod render;
 mod runtime;
+mod transfer;
+mod updater;
 use policy::Invocation;
 use render::RenderFeedback;
 use runtime::RuntimeState;
@@ -64,6 +66,9 @@ enum Mode {
     VaultDeleted,
     UpdateConsent,
     UpdateResult,
+    UpdateDownload,
+    UpdateInstall,
+    Csv,
     NewFolder,
     DeleteFolder,
     Folders(bool), // true: move the selected entry, false: browse a folder.
@@ -536,6 +541,7 @@ impl App {
         self.runtime.folder_name.clear();
         self.runtime.folder_error = None;
         self.runtime.sensitive = None;
+        self.runtime.csv = None;
         self.runtime.delete_authorization = None;
         self.runtime.update_return = None;
         self.runtime.palette = None;
@@ -747,6 +753,9 @@ impl App {
                 }
                 self.leave(Action::Browse);
             }
+            Command::ImportCsv => self.open_csv(false),
+            Command::ExportCsv => self.open_csv(true),
+            Command::InstallUpdate => self.open_update_download(),
             Command::CheckUpdates => {
                 if self.runtime.update_rx.is_some() {
                     self.info(self.tr(
@@ -1046,6 +1055,7 @@ impl App {
     fn tick(&mut self, now: Instant) -> bool {
         self.clipboard.tick(now);
         let mut changed = self.poll_update();
+        changed |= self.poll_download();
         if self.status_until.is_some_and(|deadline| now >= deadline) {
             self.clear_notice();
             changed = true;
@@ -1122,6 +1132,14 @@ impl App {
             return;
         }
         match self.runtime.mode {
+            Mode::Csv => {
+                self.csv_key(key);
+                return;
+            }
+            Mode::UpdateDownload | Mode::UpdateInstall => {
+                self.update_install_key(key);
+                return;
+            }
             Mode::DeleteFolder => {
                 match key.code {
                     KeyCode::Esc => {
@@ -1292,7 +1310,10 @@ impl App {
             | Mode::VaultDeleteConfirm
             | Mode::VaultDeleted
             | Mode::UpdateConsent
-            | Mode::UpdateResult => {}
+            | Mode::UpdateResult
+            | Mode::Csv
+            | Mode::UpdateDownload
+            | Mode::UpdateInstall => {}
             Mode::BrowserConfirm => {}
             Mode::Edit => {
                 if ctrl && letter == Some('s') {
@@ -1485,6 +1506,10 @@ impl App {
     fn paste(&mut self, text: &str) {
         self.last_activity = Instant::now();
         if self.language_choice.is_some() {
+            return;
+        }
+        if self.runtime.mode == Mode::Csv {
+            self.csv_paste(text);
             return;
         }
         if self.runtime.mode == Mode::NewFolder {

@@ -1,6 +1,9 @@
 //! A fixed action palette, not a shell or a password/argument input.
-use crate::{i18n::Language, input::Input};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::{
+    i18n::Language,
+    input::{control_shortcut, Input},
+};
+use crossterm::event::{KeyCode, KeyEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -179,9 +182,7 @@ impl Palette {
                     KeyCode::Char(c) => self.query.text().len() + c.len_utf8() <= 256,
                     _ => true,
                 };
-                if (fits || key.modifiers.contains(KeyModifiers::CONTROL))
-                    && self.query.key(key, false)
-                {
+                if (fits || control_shortcut(key)) && self.query.key(key, false) {
                     self.selected = 0;
                 }
             }
@@ -242,6 +243,18 @@ mod tests {
         palette.query.clear();
         palette.paste(&"a".repeat(256));
         palette.key(KeyEvent::new(KeyCode::Char('я'), KeyModifiers::NONE), 0);
+        assert_eq!(palette.query.text().len(), 256);
+        palette.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), 0);
+        assert!(palette.query.text().is_empty());
+    }
+    #[test]
+    fn altgr_text_cannot_bypass_the_palette_byte_limit_or_clear_its_query() {
+        let mut palette = Palette::default();
+        palette.paste(&"a".repeat(255));
+        let modifiers = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        palette.key(KeyEvent::new(KeyCode::Char('@'), modifiers), 0);
+        assert_eq!(palette.query.text().len(), 256);
+        palette.key(KeyEvent::new(KeyCode::Char('u'), modifiers), 0);
         assert_eq!(palette.query.text().len(), 256);
         palette.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), 0);
         assert!(palette.query.text().is_empty());

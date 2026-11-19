@@ -9,11 +9,12 @@ use crate::{
     vault::{DeleteAuthorization, EntryData, Session},
 };
 use anyhow::Result;
+#[cfg(test)]
+use crossterm::event::KeyModifiers;
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -1074,10 +1075,7 @@ impl App {
             return;
         }
         self.last_activity = Instant::now();
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL)
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::ALT | KeyModifiers::SUPER);
+        let ctrl = input::control_shortcut(key);
         let letter = match key.code {
             KeyCode::Char(c) => Some(match c.to_lowercase().next().unwrap_or(c) {
                 'ы' => 's',

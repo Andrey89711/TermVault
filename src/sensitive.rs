@@ -1,6 +1,11 @@
 //! Separate masked forms for master-passphrase changes and vault deletion.
-use crate::{i18n::Language, input::Input};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::{
+    i18n::Language,
+    input::{control_shortcut, Input},
+};
+#[cfg(test)]
+use crossterm::event::KeyModifiers;
+use crossterm::event::{KeyCode, KeyEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SensitiveKind {
@@ -66,9 +71,7 @@ impl SensitiveForm {
                     KeyCode::Char(c) => self.fields[self.field].text().len() + c.len_utf8() <= 1024,
                     _ => true,
                 };
-                if (fits || key.modifiers.contains(KeyModifiers::CONTROL))
-                    && self.fields[self.field].key(key, false)
-                {
+                if (fits || control_shortcut(key)) && self.fields[self.field].key(key, false) {
                     self.error = None;
                 }
             }
@@ -95,6 +98,20 @@ impl SensitiveForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn altgr_master_text_stays_masked_and_obeys_the_field_byte_limit() {
+        let mut form = SensitiveForm::new(SensitiveKind::ChangeMaster);
+        let modifiers = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        assert!(form.paste(&"x".repeat(1023)));
+        form.key(KeyEvent::new(KeyCode::Char('@'), modifiers));
+        assert_eq!(form.fields[0].text().len(), 1024);
+        assert!(form.fields[0].text().ends_with('@'));
+        form.key(KeyEvent::new(KeyCode::Char('u'), modifiers));
+        assert_eq!(form.fields[0].text().len(), 1024);
+        assert!(!form.fields[0].rendered(true, false).contains('@'));
+        form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(form.fields[0].text().is_empty());
+    }
     #[test]
     fn all_master_fields_stay_masked_and_never_accept_multiline_paste() {
         let mut form = SensitiveForm::new(SensitiveKind::ChangeMaster);

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Accept AltGr text such as `@` in login and other input fields without treating
+  Ctrl+Alt as control shortcuts; preserve field byte limits and password masking.
+
 ## 0.1.1 — 2026-11-17
 
 - Shared capability checks for keyboard and command-palette actions, including

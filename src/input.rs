@@ -1,8 +1,16 @@
 use anyhow::{bail, Result};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use zeroize::Zeroizing;
 
 pub const MAX_INPUT: usize = 8192;
+
+/// AltGr is commonly reported as Ctrl+Alt; it is text input, not a Ctrl shortcut.
+pub fn control_shortcut(key: KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.intersects(
+            KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META,
+        )
+}
 
 #[derive(Default)]
 pub struct Input {
@@ -33,17 +41,35 @@ impl Input {
         true
     }
     pub fn key(&mut self, key: KeyEvent, multiline: bool) -> bool {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        if key
+            .modifiers
+            .contains(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META)
+        {
+            return match key.code {
+                KeyCode::Char(c) if !c.is_control() => self.insert(&c.to_string(), multiline),
+                _ => false,
+            };
+        }
+        if control_shortcut(key) {
             if matches!(key.code, KeyCode::Char('u' | 'U')) {
                 self.clear();
                 return true;
             }
             return false;
         }
-        if key
-            .modifiers
-            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
-        {
+        if key.modifiers.intersects(
+            KeyModifiers::CONTROL
+                | KeyModifiers::ALT
+                | KeyModifiers::SUPER
+                | KeyModifiers::HYPER
+                | KeyModifiers::META,
+        ) {
             return false;
         }
         match key.code {
@@ -140,6 +166,56 @@ pub fn generate(length: usize) -> Result<Zeroizing<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn at_sign_and_altgr_text_are_inserted_without_becoming_shortcuts() {
+        for modifiers in [
+            KeyModifiers::NONE,
+            KeyModifiers::SHIFT,
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ] {
+            let mut input = Input::from("user");
+            assert!(input.key(KeyEvent::new(KeyCode::Char('@'), modifiers), false));
+            assert!(input.insert("example.test", false));
+            assert_eq!(input.text(), "user@example.test");
+        }
+        let mut input = Input::from("keep");
+        for c in ['u', 'q', 'l', 'p', '€', '{', '}'] {
+            assert!(input.key(
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT),
+                false,
+            ));
+        }
+        assert_eq!(input.text(), "keepuqlp€{}");
+        assert!(input.key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            false,
+        ));
+        assert!(input.text().is_empty());
+    }
+    #[test]
+    fn altgr_preserves_limits_control_filtering_and_ignores_releases() {
+        let modifiers = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        let mut input = Input::from(&"x".repeat(MAX_INPUT));
+        assert!(!input.key(KeyEvent::new(KeyCode::Char('@'), modifiers), false));
+        assert_eq!(input.text().len(), MAX_INPUT);
+        input.clear();
+        for code in [KeyCode::Char('\n'), KeyCode::Char('\x1b'), KeyCode::Left] {
+            assert!(!input.key(KeyEvent::new(code, modifiers), true));
+        }
+        assert!(!input.key(
+            KeyEvent::new_with_kind(KeyCode::Char('@'), modifiers, KeyEventKind::Release),
+            false,
+        ));
+        for blocked in [
+            KeyModifiers::ALT,
+            KeyModifiers::CONTROL,
+            modifiers | KeyModifiers::SUPER,
+        ] {
+            assert!(!input.key(KeyEvent::new(KeyCode::Char('@'), blocked), false));
+        }
+        assert!(input.text().is_empty());
+    }
     #[test]
     fn unicode_editing_and_masks() {
         let mut input = Input::from("Привет");

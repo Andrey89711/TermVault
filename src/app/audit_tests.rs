@@ -5,6 +5,61 @@ use ratatui::backend::TestBackend;
 const MASTER: &str = "audit test master passphrase";
 const PASSWORD: &str = "AUDIT_PASSWORD_NOT_FOR_DISPLAY";
 
+#[test]
+fn login_at_sign_is_editable_with_shift_or_altgr_and_survives_save_and_reopen() {
+    for modifiers in [
+        KeyModifiers::NONE,
+        KeyModifiers::SHIFT,
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT,
+    ] {
+        let (_root, mut app) = fixture();
+        let id = app.selected_id().unwrap();
+        app.edit(false);
+        let form = app.runtime.form.as_mut().unwrap();
+        form.field = 1;
+        form.fields[1] = Input::from("user");
+        app.key(KeyEvent::new(KeyCode::Char('@'), modifiers));
+        app.paste("example.test");
+        assert_eq!(
+            app.runtime.form.as_ref().unwrap().fields[1].text(),
+            "user@example.test"
+        );
+        assert!(app.runtime.form.as_ref().unwrap().dirty);
+        // AltGr letters must remain text, never trigger quit, lock, palette, or Ctrl+U.
+        for c in ['q', 'l', 'p', 'u'] {
+            app.key(KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ));
+        }
+        assert!(!app.exit);
+        assert!(app.runtime.session.is_some());
+        assert!(app.runtime.palette.is_none());
+        let expected = "user@example.testqlpu";
+        assert_eq!(
+            app.runtime.form.as_ref().unwrap().fields[1].text(),
+            expected
+        );
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(app.runtime.form.is_none());
+        assert_eq!(
+            app.runtime
+                .session
+                .as_ref()
+                .unwrap()
+                .entry(id)
+                .unwrap()
+                .username
+                .as_str(),
+            expected
+        );
+        app.lock();
+        let reopened = Session::unlock(&app.path, MASTER).unwrap();
+        assert_eq!(reopened.entry(id).unwrap().username.as_str(), expected);
+    }
+}
+
 fn fixture() -> (tempfile::TempDir, App) {
     let root = tempfile::tempdir().unwrap();
     let mut app = App::new(

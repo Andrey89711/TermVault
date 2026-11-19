@@ -50,14 +50,14 @@ impl App {
         if invocation == Invocation::Keyboard {
             match command {
                 Command::Quit => return true,
-                Command::Lock => return self.session.is_some(),
+                Command::Lock => return self.runtime.session.is_some(),
                 _ => {}
             }
         }
         if self.language_choice.is_some()
             || self.browser_origin.is_some()
             || matches!(
-                self.mode,
+                self.runtime.mode,
                 Mode::Delete
                     | Mode::Discard(_)
                     | Mode::BrowserConfirm
@@ -72,23 +72,23 @@ impl App {
         {
             return false;
         }
-        if self.mode == Mode::VaultDeleted {
+        if self.runtime.mode == Mode::VaultDeleted {
             return command == Command::Quit;
         }
-        let Some(session) = &self.session else {
+        let Some(session) = &self.runtime.session else {
             return match command {
                 Command::Unlock | Command::Language | Command::CheckUpdates | Command::Quit => true,
                 Command::UpdateResult => self.update_result.is_some(),
                 _ => false,
             };
         };
-        let browsing = self.mode == Mode::Browse;
-        let editing = self.mode == Mode::Edit && self.form.is_some();
+        let browsing = self.runtime.mode == Mode::Browse;
+        let editing = self.runtime.mode == Mode::Edit && self.runtime.form.is_some();
         match command {
             Command::Language | Command::CheckUpdates | Command::Lock | Command::Quit => true,
             Command::UpdateResult => self.update_result.is_some(),
             Command::Unlock => false,
-            Command::Back => editing || self.mode == Mode::Search,
+            Command::Back => editing || self.runtime.mode == Mode::Search,
             Command::SaveEntry | Command::GeneratePassword => editing && !session.readonly,
             Command::RevealPassword => editing || (browsing && self.selected_id().is_some()),
             Command::CopyPassword | Command::CopyUsername => {

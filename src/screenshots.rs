@@ -1,7 +1,14 @@
 //! Opt-in screenshots from the real Ratatui renderer, using temporary demo data only.
 //! Run explicitly with `cargo test --locked capture_documentation -- --ignored`.
 use super::*;
-use ratatui::{backend::TestBackend, buffer::Buffer, style::Color};
+use crate::theme;
+use ratatui::{
+    backend::TestBackend,
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::Span,
+};
 use std::{fmt::Write, fs, path::Path};
 
 const COLS: u16 = 112;
@@ -349,8 +356,9 @@ fn capture_documentation() {
         &output.join("unlock.svg"),
         "TermVault — unlock a local demo vault",
     );
-    app.session = Some(session);
-    app.expanded_folders
+    app.runtime.session = Some(session);
+    app.runtime
+        .expanded_folders
         .extend([vault_root, personal, work, projects]);
     app.refresh(Some(selected));
     app.info("Demo vault loaded — test data only");

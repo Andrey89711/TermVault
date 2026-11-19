@@ -13,16 +13,16 @@ fn fixture() -> (tempfile::TempDir, App) {
         Duration::from_secs(120),
     );
     app.clipboard = Clipboard::memory_for_test();
-    app.master = Input::from(MASTER);
-    app.confirmation = Input::from(MASTER);
+    app.runtime.master = Input::from(MASTER);
+    app.runtime.confirmation = Input::from(MASTER);
     app.unlock();
-    assert!(app.session.is_some());
+    assert!(app.runtime.session.is_some());
     app.edit(true);
-    app.form.as_mut().unwrap().fields[0] = Input::from("Audit entry");
-    app.form.as_mut().unwrap().fields[1] = Input::from("audit-user");
-    app.form.as_mut().unwrap().fields[2] = Input::from(PASSWORD);
-    app.form.as_mut().unwrap().fields[3] = Input::from("https://audit.example/login");
-    app.form.as_mut().unwrap().dirty = true;
+    app.runtime.form.as_mut().unwrap().fields[0] = Input::from("Audit entry");
+    app.runtime.form.as_mut().unwrap().fields[1] = Input::from("audit-user");
+    app.runtime.form.as_mut().unwrap().fields[2] = Input::from(PASSWORD);
+    app.runtime.form.as_mut().unwrap().fields[3] = Input::from("https://audit.example/login");
+    app.runtime.form.as_mut().unwrap().dirty = true;
     assert!(app.save());
     (root, app)
 }
@@ -74,12 +74,12 @@ fn capability_table_matches_keyboard_and_palette_in_every_context() {
             app.edit(false);
         }
         if context.starts_with("readonly") {
-            app.session.as_mut().unwrap().readonly = true;
+            app.runtime.session.as_mut().unwrap().readonly = true;
         }
         match context {
             "locked" => app.lock(),
             "browser" => app.browser_origin = Some("https://audit.example".into()),
-            "modal" => app.mode = Mode::Delete,
+            "modal" => app.runtime.mode = Mode::Delete,
             _ => {}
         }
         for command in actions {
@@ -130,7 +130,7 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
     if app.language_choice.is_some()
         || app.browser_origin.is_some()
         || matches!(
-            app.mode,
+            app.runtime.mode,
             Mode::Delete
                 | Mode::Discard(_)
                 | Mode::BrowserConfirm
@@ -145,10 +145,10 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
     {
         return Vec::new();
     }
-    if app.mode == Mode::VaultDeleted {
+    if app.runtime.mode == Mode::VaultDeleted {
         return vec![Command::Quit];
     }
-    let Some(session) = &app.session else {
+    let Some(session) = &app.runtime.session else {
         let mut commands = vec![Command::Unlock, Command::Language, Command::CheckUpdates];
         if app.update_result.is_some() {
             commands.push(Command::UpdateResult);
@@ -157,7 +157,7 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
         return commands;
     };
     let mut commands = Vec::new();
-    match app.mode {
+    match app.runtime.mode {
         Mode::Browse => {
             if !session.readonly {
                 commands.extend([Command::NewEntry, Command::NewGeneratedEntry]);
@@ -188,7 +188,7 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
                 commands.extend([Command::ChangeMaster, Command::DeleteVault]);
             }
         }
-        Mode::Edit if app.form.is_some() => {
+        Mode::Edit if app.runtime.form.is_some() => {
             if !session.readonly {
                 commands.extend([Command::SaveEntry, Command::GeneratePassword]);
             }
@@ -254,16 +254,17 @@ fn every_command_matches_legacy_palette_membership_and_order_across_contexts() {
     ];
     for session_state in ["normal", "readonly", "locked"] {
         let (_root, mut app) = fixture();
-        let entry = app.entries[0].0;
-        let root = app.session.as_ref().unwrap().root_folder();
+        let entry = app.runtime.entries[0].0;
+        let root = app.runtime.session.as_ref().unwrap().root_folder();
         let folder = app
+            .runtime
             .session
             .as_mut()
             .unwrap()
             .create_folder(None, "Audit folder")
             .unwrap();
         match session_state {
-            "readonly" => app.session.as_mut().unwrap().readonly = true,
+            "readonly" => app.runtime.session.as_mut().unwrap().readonly = true,
             "locked" => app.lock(),
             _ => {}
         }
@@ -272,26 +273,29 @@ fn every_command_matches_legacy_palette_membership_and_order_across_contexts() {
                 for target in ["entry", "folder", "root", "all", "search"] {
                     for overlay in ["none", "language", "browser"] {
                         for has_update in [false, true] {
-                            app.mode = mode;
-                            app.form = has_form.then(|| Form::new(None, EntryData::default()));
-                            app.folder = match target {
+                            app.runtime.mode = mode;
+                            app.runtime.form =
+                                has_form.then(|| Form::new(None, EntryData::default()));
+                            app.runtime.folder = match target {
                                 "folder" => Some(folder),
                                 "root" => Some(root),
                                 _ => None,
                             };
-                            app.explorer_focus = match target {
+                            app.runtime.explorer_focus = match target {
                                 "entry" => Some(ExplorerNode::Entry(entry)),
                                 "folder" => Some(ExplorerNode::Folder(folder)),
                                 "root" => Some(ExplorerNode::Folder(root)),
                                 _ => None,
                             };
-                            app.visible = if session_state != "locked" && target == "entry" {
+                            app.runtime.visible = if session_state != "locked" && target == "entry"
+                            {
                                 vec![0]
                             } else {
                                 Vec::new()
                             };
-                            app.selected = 0;
-                            app.query = Input::from(if target == "search" { "Audit" } else { "" });
+                            app.runtime.selected = 0;
+                            app.runtime.query =
+                                Input::from(if target == "search" { "Audit" } else { "" });
                             app.language_choice = (overlay == "language").then_some(0);
                             app.browser_origin =
                                 (overlay == "browser").then(|| "https://audit.example".to_owned());
@@ -310,7 +314,7 @@ fn every_command_matches_legacy_palette_membership_and_order_across_contexts() {
                                 );
                                 let keyboard_expected = match command {
                                     Command::Quit => true,
-                                    Command::Lock => app.session.is_some(),
+                                    Command::Lock => app.runtime.session.is_some(),
                                     _ => member,
                                 };
                                 assert_eq!(
@@ -342,27 +346,33 @@ fn semantic_shortcuts_and_palette_have_equivalent_effects() {
         for readonly in [false, true] {
             let (_left_root, mut keyboard) = fixture();
             let (_right_root, mut palette) = fixture();
-            keyboard.session.as_mut().unwrap().readonly = readonly;
-            palette.session.as_mut().unwrap().readonly = readonly;
+            keyboard.runtime.session.as_mut().unwrap().readonly = readonly;
+            palette.runtime.session.as_mut().unwrap().readonly = readonly;
             keyboard.key(KeyEvent::new(code, KeyModifiers::NONE));
             palette.open_palette();
             draw(&palette, 110, 32);
             // Same guarded semantic dispatch used by palette Enter and mouse.
             palette.execute_command(command);
             assert_eq!(
-                keyboard.mode, palette.mode,
+                keyboard.runtime.mode, palette.runtime.mode,
                 "{command:?}, readonly={readonly}"
             );
-            assert_eq!(keyboard.form.is_some(), palette.form.is_some());
             assert_eq!(
-                keyboard.reveal_until.is_some(),
-                palette.reveal_until.is_some()
+                keyboard.runtime.form.is_some(),
+                palette.runtime.form.is_some()
+            );
+            assert_eq!(
+                keyboard.runtime.reveal_until.is_some(),
+                palette.runtime.reveal_until.is_some()
             );
             assert_eq!(
                 keyboard.clipboard.owns_text_for_test(),
                 palette.clipboard.owns_text_for_test()
             );
-            assert_eq!(keyboard.session.as_ref().unwrap().entries().len(), 1);
+            assert_eq!(
+                keyboard.runtime.session.as_ref().unwrap().entries().len(),
+                1
+            );
         }
     }
 }
@@ -378,23 +388,23 @@ fn modal_emergency_shortcuts_still_require_unsaved_confirmation() {
         ] {
             let (_root, mut app) = fixture();
             app.edit(false);
-            app.form.as_mut().unwrap().dirty = true;
-            app.mode = mode;
+            app.runtime.form.as_mut().unwrap().dirty = true;
+            app.runtime.mode = mode;
             assert!(!app.command_allowed(command, Invocation::Palette));
             let code = if command == Command::Lock { 'l' } else { 'q' };
             app.key(KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL));
             assert_eq!(
-                app.mode,
+                app.runtime.mode,
                 Mode::Discard(if command == Command::Lock {
                     Action::Lock
                 } else {
                     Action::Quit
                 })
             );
-            assert!(app.session.is_some());
+            assert!(app.runtime.session.is_some());
             assert!(!app.exit);
             app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-            assert!(app.session.is_none());
+            assert!(app.runtime.session.is_none());
             assert_eq!(app.exit, command == Command::Quit);
         }
     }
@@ -412,30 +422,36 @@ fn editor_control_shortcuts_recheck_readonly_capabilities_like_palette_actions()
             let (_right_root, mut palette) = fixture();
             for app in [&mut keyboard, &mut palette] {
                 app.edit(false);
-                app.form.as_mut().unwrap().fields[0] = Input::from("Changed title");
-                app.form.as_mut().unwrap().dirty = true;
-                app.session.as_mut().unwrap().readonly = readonly;
+                app.runtime.form.as_mut().unwrap().fields[0] = Input::from("Changed title");
+                app.runtime.form.as_mut().unwrap().dirty = true;
+                app.runtime.session.as_mut().unwrap().readonly = readonly;
             }
             keyboard.key(KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL));
             palette.open_palette();
             draw(&palette, 110, 32);
             palette.execute_command(command);
             assert_eq!(
-                keyboard.mode, palette.mode,
+                keyboard.runtime.mode, palette.runtime.mode,
                 "{command:?}, readonly={readonly}"
             );
-            assert_eq!(keyboard.form.is_some(), palette.form.is_some());
             assert_eq!(
-                keyboard.reveal_until.is_some(),
-                palette.reveal_until.is_some()
+                keyboard.runtime.form.is_some(),
+                palette.runtime.form.is_some()
+            );
+            assert_eq!(
+                keyboard.runtime.reveal_until.is_some(),
+                palette.runtime.reveal_until.is_some()
             );
             if readonly {
                 for app in [&keyboard, &palette] {
-                    let form = app.form.as_ref().unwrap();
+                    let form = app.runtime.form.as_ref().unwrap();
                     assert_eq!(form.fields[0].text(), "Changed title");
                     assert_eq!(form.fields[2].text(), PASSWORD);
                     assert!(form.dirty);
-                    assert_eq!(app.session.as_ref().unwrap().entries()[0].1, "Audit entry");
+                    assert_eq!(
+                        app.runtime.session.as_ref().unwrap().entries()[0].1,
+                        "Audit entry"
+                    );
                 }
             }
         }
@@ -463,69 +479,70 @@ fn lock_drops_the_complete_working_set_from_every_modal_and_sensitive_state() {
     ] {
         for automatic in [false, true] {
             let (_root, mut app) = fixture();
-            let folder = app.session.as_ref().unwrap().root_folder();
+            let folder = app.runtime.session.as_ref().unwrap().root_folder();
             app.edit(false);
-            app.form.as_mut().unwrap().dirty = true;
-            app.master = Input::from("MASTER_DRAFT");
-            app.confirmation = Input::from("CONFIRMATION_DRAFT");
-            app.query = Input::from("PRIVATE_SEARCH");
-            app.folder_name = Input::from("PRIVATE_FOLDER");
-            app.folder = Some(folder);
-            app.folder_error = Some("folder validation".into());
-            app.folder_selected = 4;
-            app.expanded_folders.insert(folder);
-            app.explorer_focus = Some(ExplorerNode::Folder(folder));
-            app.pending_folder_delete = Some(folder);
-            app.palette = Some(Palette::default());
-            app.palette.as_mut().unwrap().query = Input::from("PRIVATE_PALETTE_QUERY");
-            app.sensitive = Some(SensitiveForm::new(SensitiveKind::ChangeMaster));
-            app.sensitive.as_mut().unwrap().fields[0] = Input::from(MASTER);
-            app.delete_authorization = Some(
-                app.session
+            app.runtime.form.as_mut().unwrap().dirty = true;
+            app.runtime.master = Input::from("MASTER_DRAFT");
+            app.runtime.confirmation = Input::from("CONFIRMATION_DRAFT");
+            app.runtime.query = Input::from("PRIVATE_SEARCH");
+            app.runtime.folder_name = Input::from("PRIVATE_FOLDER");
+            app.runtime.folder = Some(folder);
+            app.runtime.folder_error = Some("folder validation".into());
+            app.runtime.folder_selected = 4;
+            app.runtime.expanded_folders.insert(folder);
+            app.runtime.explorer_focus = Some(ExplorerNode::Folder(folder));
+            app.runtime.pending_folder_delete = Some(folder);
+            app.runtime.palette = Some(Palette::default());
+            app.runtime.palette.as_mut().unwrap().query = Input::from("PRIVATE_PALETTE_QUERY");
+            app.runtime.sensitive = Some(SensitiveForm::new(SensitiveKind::ChangeMaster));
+            app.runtime.sensitive.as_mut().unwrap().fields[0] = Input::from(MASTER);
+            app.runtime.delete_authorization = Some(
+                app.runtime
+                    .session
                     .as_ref()
                     .unwrap()
                     .authorize_delete(MASTER, "audit.kdbx")
                     .unwrap(),
             );
-            app.deleted_backup = Some(app.path.with_extension("backup"));
+            app.runtime.deleted_backup = Some(app.path.with_extension("backup"));
             let (_sender, receiver) = std::sync::mpsc::channel();
-            app.update_rx = Some(receiver); // Channel only: never start an HTTP worker.
-            app.update_return = Some(Mode::Edit);
-            app.reveal_until = Some(Instant::now() + Duration::from_secs(10));
+            app.runtime.update_rx = Some(receiver); // Channel only: never start an HTTP worker.
+            app.runtime.update_return = Some(Mode::Edit);
+            app.runtime.reveal_until = Some(Instant::now() + Duration::from_secs(10));
             app.language_choice = Some(0);
             app.clipboard.copy(PASSWORD, Instant::now()).unwrap();
-            app.mode = mode;
+            app.runtime.mode = mode;
             if automatic {
                 assert!(app.tick(app.last_activity + app.lock_after));
             } else {
                 app.lock();
             }
-            assert!(app.session.is_none(), "{mode:?}");
-            assert!(app.entries.is_empty());
-            assert!(app.visible.is_empty());
-            assert_eq!(app.selected, 0);
-            assert!(app.master.text().is_empty());
-            assert!(app.confirmation.text().is_empty());
-            assert!(app.query.text().is_empty());
-            assert!(app.folder_name.text().is_empty());
-            assert!(app.folder.is_none());
-            assert!(app.folder_error.is_none());
-            assert_eq!(app.folder_selected, 0);
-            assert!(app.expanded_folders.is_empty());
-            assert!(app.explorer_focus.is_none());
-            assert!(app.pending_folder_delete.is_none());
-            assert!(app.form.is_none());
-            assert!(app.palette.is_none());
-            assert!(app.sensitive.is_none());
-            assert!(app.delete_authorization.is_none());
-            assert!(app.deleted_backup.is_none());
-            assert!(app.update_rx.is_none());
-            assert!(app.update_return.is_none());
-            assert!(app.reveal_until.is_none());
+            assert!(app.runtime.session.is_none(), "{mode:?}");
+            assert!(app.runtime.entries.is_empty());
+            assert!(app.runtime.visible.is_empty());
+            assert_eq!(app.runtime.selected, 0);
+            assert!(app.runtime.master.text().is_empty());
+            assert!(app.runtime.confirmation.text().is_empty());
+            assert!(app.runtime.query.text().is_empty());
+            assert!(app.runtime.folder_name.text().is_empty());
+            assert!(app.runtime.folder.is_none());
+            assert!(app.runtime.folder_error.is_none());
+            assert_eq!(app.runtime.folder_selected, 0);
+            assert!(app.runtime.expanded_folders.is_empty());
+            assert!(app.runtime.explorer_focus.is_none());
+            assert!(app.runtime.pending_folder_delete.is_none());
+            assert!(app.runtime.form.is_none());
+            assert!(app.runtime.palette.is_none());
+            assert!(app.runtime.sensitive.is_none());
+            assert!(app.runtime.delete_authorization.is_none());
+            assert!(app.runtime.deleted_backup.is_none());
+            assert!(app.runtime.update_rx.is_none());
+            assert!(app.runtime.update_return.is_none());
+            assert!(app.runtime.reveal_until.is_none());
             assert!(app.language_choice.is_none());
             assert!(!app.clipboard.owns_text_for_test());
             assert!(app.browser_credentials.is_none());
-            assert_eq!(app.mode, Mode::Browse);
+            assert_eq!(app.runtime.mode, Mode::Browse);
             let rendered = draw(&app, 110, 32);
             for secret in [
                 PASSWORD,
@@ -579,8 +596,8 @@ fn resized_hidden_overlays_revoke_feedback_and_cannot_activate_background_hits()
         row: old_hit.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(app.form.is_none());
-    assert!(app.palette.is_some());
+    assert!(app.runtime.form.is_none());
+    assert!(app.runtime.palette.is_some());
 }
 
 #[test]
@@ -599,10 +616,10 @@ fn browser_approval_requires_a_new_visible_review_after_returning_or_resizing() 
         }
         app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         assert!(app.browser_credentials.is_none());
-        assert!(app.session.is_some());
+        assert!(app.runtime.session.is_some());
         assert!(!draw(&app, 110, 32).contains(PASSWORD));
         app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-        assert!(app.session.is_none());
+        assert!(app.runtime.session.is_none());
         assert!(app.exit);
         let approved = app.browser_credentials.take().unwrap();
         assert_eq!(approved.password, PASSWORD);
@@ -616,24 +633,117 @@ fn browser_approval_requires_a_new_visible_review_after_returning_or_resizing() 
 fn resizing_revokes_a_previously_visible_full_deletion_warning() {
     let (_root, mut app) = fixture();
     let before = std::fs::read(&app.path).unwrap();
-    app.delete_authorization = Some(
-        app.session
+    app.runtime.delete_authorization = Some(
+        app.runtime
+            .session
             .as_ref()
             .unwrap()
             .authorize_delete(MASTER, "audit.kdbx")
             .unwrap(),
     );
-    app.mode = Mode::VaultDeleteConfirm;
+    app.runtime.mode = Mode::VaultDeleteConfirm;
     draw(&app, 110, 40);
     assert!(app.render.vault_delete_visible.get());
     let text = draw(&app, 40, 10);
     assert!(text.contains("resize"));
     assert!(!app.render.vault_delete_visible.get());
     app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-    assert!(app.delete_authorization.is_some());
+    assert!(app.runtime.delete_authorization.is_some());
     assert_eq!(std::fs::read(&app.path).unwrap(), before);
     draw(&app, 110, 40);
     assert!(app.render.vault_delete_visible.get());
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.delete_authorization.is_none());
+    assert!(app.runtime.delete_authorization.is_none());
+}
+
+#[test]
+fn rendering_and_explicit_runtime_access_remain_separate_from_the_controller() {
+    let controller = include_str!("../app.rs");
+    assert!(!controller.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("fn draw") || line.starts_with("pub(super) fn draw")
+    }));
+    assert!(!controller.contains("render_widget("));
+    assert!(!controller.contains("render_stateful_widget("));
+    for source in [
+        controller,
+        include_str!("runtime.rs"),
+        include_str!("render.rs"),
+    ] {
+        assert!(
+            !source.contains("Deref"),
+            "do not restore runtime projection"
+        );
+    }
+}
+
+#[test]
+fn every_frame_clears_all_consent_and_hit_feedback_even_on_early_return() {
+    let root = tempfile::tempdir().unwrap();
+    let app = App::new(
+        root.path().join("unopened.kdbx"),
+        false,
+        Duration::from_secs(120),
+    );
+    for (width, height) in [(110, 32), (40, 10), (0, 0)] {
+        let feedback = &app.render;
+        let flags = [
+            &feedback.language_visible,
+            &feedback.folder_dialog_visible,
+            &feedback.browser_review_visible,
+            &feedback.palette_visible,
+            &feedback.sensitive_visible,
+            &feedback.vault_delete_visible,
+            &feedback.update_consent_visible,
+        ];
+        for flag in flags {
+            flag.set(true);
+        }
+        let hit = ratatui::layout::Rect::new(1, 1, 1, 1);
+        feedback.language_hits.borrow_mut().push((hit, 0));
+        feedback
+            .explorer_hits
+            .borrow_mut()
+            .push((hit, ExplorerNode::Entry(EntryId::new())));
+        feedback
+            .palette_hits
+            .borrow_mut()
+            .push((hit, Command::Quit));
+
+        draw(&app, width, height);
+
+        for flag in flags {
+            assert!(!flag.get(), "{width}x{height}: stale consent");
+        }
+        assert!(feedback.language_hits.borrow().is_empty());
+        assert!(feedback.explorer_hits.borrow().is_empty());
+        assert!(feedback.palette_hits.borrow().is_empty());
+        assert!(app.runtime.session.is_none());
+        assert!(!app.path.exists());
+    }
+}
+
+#[test]
+fn approved_browser_handoff_survives_runtime_teardown_until_taken_once() {
+    let (_root, mut app) = fixture();
+    let before = std::fs::read(&app.path).unwrap();
+    app.browser_origin = Some("https://audit.example".into());
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    draw(&app, 110, 32);
+    app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    assert!(app.exit);
+    assert!(app.runtime.session.is_none());
+    assert!(app.runtime.entries.is_empty());
+    assert!(app.runtime.form.is_none());
+    assert!(app.browser_credentials.is_some());
+
+    app.lock();
+    assert!(app.browser_credentials.is_some());
+    assert!(!draw(&app, 110, 32).contains(PASSWORD));
+    let approved = app.browser_credentials.take().unwrap();
+    assert_eq!(approved.origin, "https://audit.example");
+    assert_eq!(approved.username, "audit-user");
+    assert_eq!(approved.password, PASSWORD);
+    assert!(app.browser_credentials.take().is_none());
+    assert_eq!(std::fs::read(&app.path).unwrap(), before);
 }

@@ -67,17 +67,3 @@ impl Drop for RuntimeState {
         // zeroizing/drop implementations; never copy secrets during teardown.
     }
 }
-
-// Keep the incremental extraction source-compatible. Cross-field mutable
-// operations borrow `runtime` explicitly rather than through this projection.
-impl std::ops::Deref for App {
-    type Target = RuntimeState;
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-impl std::ops::DerefMut for App {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.runtime
-    }
-}

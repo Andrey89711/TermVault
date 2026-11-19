@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 — 2026-11-19
 
 - Accept AltGr text such as `@` in login and other input fields without treating
   Ctrl+Alt as control shortcuts; preserve field byte limits and password masking.
+- Launch unsigned Windows setup and uninstall scripts with a process-only
+  execution-policy override; no permanent PowerShell policy changes.
+- Finish separating vault rendering from control logic and use explicit runtime
+  state access, with lifecycle and browser-handoff regression coverage.
 
 ## 0.1.1 — 2026-11-17
 

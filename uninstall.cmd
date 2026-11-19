@@ -3,9 +3,9 @@ setlocal
 set "termvault_selfremove="
 if exist "%~dp0.termvault-install.json" set "termvault_selfremove=1"
 if defined termvault_selfremove (
-    powershell.exe -NoProfile -File "%~dp0uninstall.ps1" -KeepLauncher %*
+    "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall.ps1" -KeepLauncher %*
 ) else (
-    powershell.exe -NoProfile -File "%~dp0uninstall.ps1" %*
+    "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall.ps1" %*
 )
 if errorlevel 1 (
     pause

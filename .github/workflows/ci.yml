@@ -40,6 +40,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-setup.ps1 -BinaryPath target/release/tvault.exe
+      - name: Test unsigned downloaded Windows launchers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-launchers.ps1
       - name: Test Windows uninstallation with isolated files and registry
         if: runner.os == 'Windows'
         shell: pwsh

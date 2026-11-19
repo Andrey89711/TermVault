@@ -39,8 +39,12 @@ credentials. Passwords remain masked in documentation screenshots.
 
 ## Build and run
 
-The current release is [v0.1.1](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.1):
-download `termvault-0.1.1-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
+The current release is [v0.1.2](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.2):
+download `termvault-0.1.2-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
+Extract the complete ZIP and run **`setup.cmd`**, not `setup.ps1` directly.
+The launcher applies `ExecutionPolicy Bypass` only to its child PowerShell process;
+it does not change your saved execution policy. Organization-managed policies may
+still block unsigned scripts. Packages remain unsigned; verify their source first.
 Run `setup.cmd` / `setup.ps1` from a release ZIP for guided per-user installation.
 Uninstall through Windows Settings → Apps → TermVault, or run `uninstall.cmd`
 in the installed directory. Vaults, backups and unrelated files are always retained.

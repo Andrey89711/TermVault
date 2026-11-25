@@ -70,7 +70,6 @@ impl App {
                     | Mode::UpdateResult
                     | Mode::Csv
                     | Mode::UpdateDownload
-                    | Mode::UpdateInstall
                     | Mode::NewFolder
                     | Mode::DeleteFolder
                     | Mode::Folders(_)

@@ -195,7 +195,6 @@ fn legacy_palette_order(app: &App) -> Vec<Command> {
                 | Mode::UpdateResult
                 | Mode::Csv
                 | Mode::UpdateDownload
-                | Mode::UpdateInstall
                 | Mode::NewFolder
                 | Mode::DeleteFolder
                 | Mode::Folders(_)
@@ -318,7 +317,6 @@ fn every_command_matches_legacy_palette_membership_and_order_across_contexts() {
         Mode::UpdateResult,
         Mode::Csv,
         Mode::UpdateDownload,
-        Mode::UpdateInstall,
         Mode::NewFolder,
         Mode::DeleteFolder,
         Mode::Folders(false),

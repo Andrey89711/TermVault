@@ -18,7 +18,7 @@ publisher information yourself. Do not claim an independent security audit.
    python scripts/package-extension.py
    ```
 
-3. Choose **Add new item** and upload `dist/termvault-extension-0.1.4.zip`.
+3. Choose **Add new item** and upload `dist/termvault-extension-0.1.5.zip`.
    The filename depends on the version. **Never upload the Windows ZIP, EXE or a
    vault folder.** The correct ZIP has `manifest.json` directly at its root.
 4. Save the store-assigned extension ID (32 letters a–p). A developer must add it

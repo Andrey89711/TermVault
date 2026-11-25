@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+- On Windows x64, one approval downloads, verifies and installs an update,
+  then relaunches TermVault locked with the same vault and settings.
+- Retry transient asset download failures. Program-file rollback and the
+  owned browser-host update remain in place.
+
 ## 0.1.4
 
 - Ctrl+F searches titles, usernames, URLs and notes across folders without

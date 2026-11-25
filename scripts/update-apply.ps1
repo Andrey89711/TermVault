@@ -219,10 +219,33 @@ if ($MyInvocation.InvocationName -ne '.') {
             $stageToClean = $null
             throw 'The helper only accepts its own staging plan.'
         }
+        $plan = Read-UpdateJson $PlanPath
+        $restart = $plan.PSObject.Properties['restart']
+        if ($null -ne $restart) {
+            $restartDirectory = [string]$restart.Value.directory
+            if (![IO.Path]::IsPathRooted($restartDirectory) -or ![IO.Directory]::Exists($restartDirectory)) {
+                throw 'Original working directory is unavailable.'
+            }
+        }
         Invoke-TermVaultUpdate -PlanFile $PlanPath
+        if ($null -ne $restart) {
+            try {
+                $launch = @{
+                    FilePath = Join-Path ([string]$plan.root) 'tvault.exe'
+                    WorkingDirectory = $restartDirectory
+                    ErrorAction = 'Stop'
+                }
+                if ([string]$restart.Value.arguments) { $launch.ArgumentList = [string]$restart.Value.arguments }
+                Start-Process @launch
+            } catch {
+                [Console]::Error.WriteLine('TermVault was updated, but could not restart. Run tvault again.')
+                exit 1
+            }
+        }
     } catch {
         # Fixed message only; no vault paths or credentials. Never run fallback
         # scripts or silently retry an installation after a failed transaction.
+        [Console]::Error.WriteLine('TermVault update failed. Run tvault again, or repair the installation with setup.cmd.')
         exit 1
     } finally {
         if ($stageToClean -and (Split-Path $stageToClean -Leaf) -match '^termvault-update-[A-Za-z0-9_-]+$' -and

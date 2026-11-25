@@ -40,8 +40,9 @@ writers are required, as for normal saves. Same-user filesystem attacks are not 
 Update checking and package downloading require explicit consent and bounded HTTPS
 requests to the official repository and permitted release-asset hosts. No vault/session
 data is supplied to the worker. Downloaded archives must match the published checksum
-and strict payload allowlist before staging. Installation requires a separate visible
-confirmation; program-file replacement must not include vaults, backups or settings.
+and strict payload allowlist before staging. One visible confirmation explicitly
+authorizes download, installation and restart; program-file replacement must not
+include vaults, backups or settings. The relaunched application starts locked.
 Packages and their checksums are hosted together and are unsigned: they cannot defend
 against a compromised publisher/repository. This is not cryptographically signed update
 authorization. Updates run with the current user's permissions, not administrator rights.

@@ -233,7 +233,6 @@ mod tests {
             Mode::BrowserConfirm,
             Mode::NewFolder,
             Mode::Csv,
-            Mode::UpdateInstall,
         ] {
             app.runtime.mode = mode;
             for command in [Command::ImportCsv, Command::ExportCsv] {

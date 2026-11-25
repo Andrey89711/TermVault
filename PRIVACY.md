@@ -52,7 +52,8 @@ from `api.github.com`; download consent also permits requests to GitHub and its
 approved release-asset host. GitHub receives your IP address and a
 `TermVault/<version>` User-Agent; no vault contents, credentials, vault paths or
 current website are sent. There are no startup/scheduled checks or unattended
-downloads/installations. Installation requires separate explicit approval.
+downloads/installations. The update consent explicitly covers download, installation
+and restart. The restart arguments and working directory stay local.
 The extension and browser bridge do not initiate these requests. GitHub handles
 request metadata under its own privacy policy.
 

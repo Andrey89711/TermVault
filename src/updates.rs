@@ -28,7 +28,7 @@ impl UpdateStatus {
     pub fn description(&self, language: Language) -> String {
         match self {
             Self::UpToDate => localized!(language, "No updates. Installed version: {}.", "Новых версий нет. Установлена версия {}.", env!("CARGO_PKG_VERSION")),
-            Self::Available(version) => localized!(language, "Version {version} is available. Installed: {}.\n\nRelease page:\nhttps://github.com/Andrey89711/TermVault/releases/tag/v{version}\n\nWindows: Ctrl+P → Download and install update.\nSeparate download and installation consent required.\nOther platforms: install manually from the release page.", "Доступна версия {version}. Установлена {}.\n\nСтраница релиза:\nhttps://github.com/Andrey89711/TermVault/releases/tag/v{version}\n\nWindows: Ctrl+P → Скачать и установить обновление.\nСкачивание и установка требуют отдельных подтверждений.\nДругие платформы: установите вручную со страницы релиза.", env!("CARGO_PKG_VERSION")),
+            Self::Available(version) => localized!(language, "Version {version} is available. Installed: {}.\n\nRelease page:\nhttps://github.com/Andrey89711/TermVault/releases/tag/v{version}\n\nWindows x64 can download, install and restart after consent.\nOther platforms: install manually from the release page.", "Доступна версия {version}. Установлена {}.\n\nСтраница релиза:\nhttps://github.com/Andrey89711/TermVault/releases/tag/v{version}\n\nНа Windows x64 приложение обновится и перезапустится после согласия.\nДругие платформы: установите вручную со страницы релиза.", env!("CARGO_PKG_VERSION")),
             Self::NoRelease => language.text("No published stable release found yet.", "Опубликованный стабильный релиз пока не найден.").into(),
         }
     }
@@ -248,7 +248,7 @@ fn download_client() -> Result<reqwest::blocking::Client> {
                 attempt.follow()
             }
         }))
-        .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(12))
         .timeout(Duration::from_secs(90))
         .user_agent(concat!("TermVault/", env!("CARGO_PKG_VERSION")))
         .build()
@@ -260,10 +260,27 @@ fn fetch_asset(client: &reqwest::blocking::Client, url: &str, maximum: u64) -> R
     if !allowed_url(&url) {
         bail!("Invalid update asset URL");
     }
-    let response = client
-        .get(url)
-        .send()
-        .context("Cannot download official GitHub asset")?;
+    let mut attempt = 0;
+    let response = loop {
+        match client
+            .get(url.clone())
+            .send()
+            .and_then(|r| r.error_for_status())
+        {
+            Err(error)
+                if attempt < 2
+                    && (error.is_connect()
+                        || error.is_timeout()
+                        || error
+                            .status()
+                            .is_some_and(|s| matches!(s.as_u16(), 502..=504))) =>
+            {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(300 * attempt));
+            }
+            result => break result?,
+        }
+    };
     if !response.status().is_success() || response.content_length().is_some_and(|n| n > maximum) {
         bail!("Missing or oversized official update asset");
     }
@@ -539,8 +556,13 @@ impl StagedUpdate {
         }
     }
 
-    /// Call only AFTER vault/clipboard teardown and final visible consent.
-    pub fn apply(self) -> Result<()> {
+    /// Call only AFTER vault/clipboard teardown and visible consent.
+    pub fn apply(
+        self,
+        vault_path: &Path,
+        settings_path: Option<&Path>,
+        lock_after: Duration,
+    ) -> Result<()> {
         if !cfg!(windows) {
             bail!("In-app installation supports Windows only");
         }
@@ -567,9 +589,13 @@ impl StagedUpdate {
             before: Some(hash(&old_marker_bytes)),
             after: hash(&marker),
         });
+        // PowerShell 5.1 passes Start-Process's ArgumentList as one command line.
+        // Quote for the Windows argv parser, not for a command shell.
+        let arguments = restart_arguments(vault_path, settings_path, lock_after)?;
         let plan = serde_json::json!({
             "schema": 1, "root": self.destination, "version": self.version,
             "files": files, "parent": std::process::id(),
+            "restart": { "arguments": arguments, "directory": std::env::current_dir()? },
         });
         let plan_path = self.directory.path().join("plan.json");
         fs::write(&plan_path, serde_json::to_vec(&plan)?)?;
@@ -596,12 +622,12 @@ impl StagedUpdate {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW; no elevation/relaunch.
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW; no elevation.
         }
         command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .context("Cannot launch trusted update helper")?;
         // Only the helper owns cleanup after a successful spawn.
@@ -610,10 +636,65 @@ impl StagedUpdate {
     }
 }
 
+fn restart_arguments(
+    vault: &Path,
+    settings: Option<&Path>,
+    lock_after: Duration,
+) -> Result<String> {
+    let path_arg = |path: &Path| {
+        path.to_str()
+            .map(quote_restart_arg)
+            .context("Cannot preserve non-Unicode restart path")
+    };
+    // Restart the same existing vault, even if this session originally used --create.
+    let mut command = format!("--lock-after {}", lock_after.as_secs());
+    if let Some(path) = settings {
+        command.push_str(" --settings-file ");
+        command.push_str(&path_arg(path)?);
+    }
+    command.push_str(" -- ");
+    command.push_str(&path_arg(vault)?);
+    Ok(command)
+}
+
+fn quote_restart_arg(arg: &str) -> String {
+    let mut result = String::from("\"");
+    let mut slashes = 0;
+    for c in arg.chars() {
+        if c == '\\' {
+            slashes += 1;
+            continue;
+        }
+        if c == '"' {
+            result.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+        } else {
+            result.extend(std::iter::repeat_n('\\', slashes));
+        }
+        slashes = 0;
+        result.push(c);
+    }
+    result.extend(std::iter::repeat_n('\\', slashes * 2));
+    result.push('"');
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn restart_opens_existing_vault_and_quotes_paths() {
+        assert_eq!(
+            restart_arguments(
+                Path::new(r"C:\Моя база\vault.kdbx"),
+                Some(Path::new(r"C:\Local Data\settings.json")),
+                Duration::from_secs(42),
+            )
+            .unwrap(),
+            r#"--lock-after 42 --settings-file "C:\Local Data\settings.json" -- "C:\Моя база\vault.kdbx""#
+        );
+        assert_eq!(quote_restart_arg("tail\\"), "\"tail\\\\\"");
+    }
     fn fixture_zip(extra: Option<(&str, u32)>, omit: Option<&str>, version: &str) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default()

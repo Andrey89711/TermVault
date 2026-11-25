@@ -132,6 +132,13 @@ try {
     $powershell = (Get-Process -Id $PID).Path
     $waitingParent = Start-Process -FilePath $powershell -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 3') -PassThru -WindowStyle Hidden
     $waitFixture.Data.parent = $waitingParent.Id
+    $restartDir = Join-Path $sandbox 'restart working directory'
+    New-Item -ItemType Directory -Path $restartDir | Out-Null
+    $restartMarker = Join-Path $restartDir 'restart marker.txt'
+    $newBinary = Join-Path $waitFixture.Stage 'payload/tvault.exe'
+    [IO.File]::Copy((Join-Path $env:SystemRoot 'System32/cmd.exe'), $newBinary, $true)
+    ($waitFixture.Data.files | Where-Object relative -CEQ 'tvault.exe').after = Get-UpdateHash $newBinary
+    $waitFixture.Data.restart = @{ directory = $restartDir; arguments = '/d /c echo restarted>"restart marker.txt"' }
     $waitFixture.Data | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath $waitFixture.Plan
     $helper = Join-Path $waitFixture.Stage 'apply.ps1'
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'update-apply.ps1') -Destination $helper
@@ -142,8 +149,13 @@ try {
     if ($watch.Elapsed.TotalSeconds -lt 1.5) { throw 'Helper did not wait for parent exit.' }
     if (Test-Path -LiteralPath $waitFixture.Stage) { throw 'Actual helper did not clean its staging directory.' }
     if ((Read-UpdateJson (Join-Path $waitFixture.Root '.termvault-install.json')).version -ne '99.0.0') { throw 'Actual helper did not apply.' }
+    $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    while (!(Test-Path -LiteralPath $restartMarker) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+    if (!(Test-Path -LiteralPath $restartMarker) -or [IO.File]::ReadAllText($restartMarker).Trim() -cne 'restarted') {
+        throw 'Updated executable did not restart with the expected arguments and working directory.'
+    }
     Assert-Preserved $waitFixture
-    Write-Host 'PASS: legacy layout additions, unowned collisions, post-addition rollback, full payload, tamper refusal, owned browser host, PID wait/cleanup, preserved vault/config.'
+    Write-Host 'PASS: payload ownership, rollback, tamper refusal, browser host, PID wait/cleanup, restart with arguments, preserved vault/config.'
 } finally {
     $env:LOCALAPPDATA = $previousLocal
     # Only this invocation's generated isolated test tree.

@@ -401,7 +401,7 @@ impl App {
                 let visible = self.draw_full_consent(frame, &self.csv_text(), self.tr(" CSV transfer ", " Перенос CSV "));
                 self.render.csv_visible.set(visible);
             }
-            Mode::UpdateDownload | Mode::UpdateInstall => {
+            Mode::UpdateDownload => {
                 let visible = self.draw_full_consent(frame, &self.install_text(), self.tr(" Update ", " Обновление "));
                 self.render.install_visible.set(visible);
             }
@@ -420,7 +420,13 @@ impl App {
             }
             Mode::UpdateResult => {
                 let text = self.update_result.as_ref().map(|status| status.description(self.language)).unwrap_or_else(|| self.tr("No update check result.", "Результат проверки отсутствует.").into());
-                popup(frame, &localized!(self.language, "{text}\n\n[Enter / Esc] Back", "{text}\n\n[Enter / Esc] Назад"), self.tr(" Updates ", " Обновления "), 18);
+                let action = if cfg!(all(windows, target_arch = "x86_64"))
+                    && matches!(self.update_result, Some(UpdateStatus::Available(_))) {
+                    self.tr("[Enter] Review update · [Esc] Back", "[Enter] К обновлению · [Esc] Назад")
+                } else {
+                    self.tr("[Enter / Esc] Back", "[Enter / Esc] Назад")
+                };
+                popup(frame, &format!("{text}\n\n{action}"), self.tr(" Updates ", " Обновления "), 18);
             }
             Mode::BrowserConfirm => {
                 let title = self.selected_id().and_then(|id| self.runtime.session.as_ref()?.entry(id))

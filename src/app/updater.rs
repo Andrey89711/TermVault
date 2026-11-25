@@ -6,17 +6,12 @@ impl App {
             self.warning(self.tr("In-app installation supports Windows x86_64 only. Use the official release page.", "Установка в приложении доступна только для Windows x86_64. Используйте официальную страницу релиза."));
             return;
         }
-        self.runtime.mode = if self.runtime.staged_update.is_some() {
-            Mode::UpdateInstall
-        } else {
-            Mode::UpdateDownload
-        };
+        self.runtime.mode = Mode::UpdateDownload;
         self.render.install_visible.set(false);
         self.clear_notice();
     }
     pub(super) fn update_install_key(&mut self, key: KeyEvent) {
         if key.code == KeyCode::Esc {
-            self.runtime.staged_update = None;
             // Dropping the receiver means a completed worker result is dropped
             // and its owned staging directory is removed. No worker can apply.
             self.runtime.download_rx = None;
@@ -45,16 +40,9 @@ impl App {
             match updates::start_download(version.clone()) {
                 Ok(receiver) => {
                     self.runtime.download_rx = Some(receiver);
-                    self.info(self.tr("Downloading and verifying; no installation yet.", "Скачиваем и проверяем; установка ещё не выполняется."));
+                    self.info(self.tr("Downloading and verifying…", "Скачиваем и проверяем…"));
                 }
                 Err(_) => self.error(self.tr("Cannot stage update. Use a complete, setup-installed Windows package and retry.", "Не удалось подготовить обновление. Нужна полная установка Windows через setup; повторите.")),
-            }
-        } else if let Some(staged) = self.runtime.staged_update.take() {
-            // Final consent has already been visible. Tear down BEFORE spawn.
-            self.lock();
-            match staged.apply() {
-                Ok(()) => self.exit = true,
-                Err(_) => self.error(self.tr("Update could not start. Vault is locked; installation unchanged. Unlock and retry.", "Не удалось начать обновление. Хранилище заблокировано; установка не изменена. Разблокируйте и повторите.")),
             }
         }
     }
@@ -70,10 +58,17 @@ impl App {
         self.runtime.download_rx = None;
         match result {
             Ok(staged) => {
-                self.runtime.staged_update = Some(staged);
-                if self.runtime.mode == Mode::UpdateDownload {
-                    self.runtime.mode = Mode::UpdateInstall;
-                    self.render.install_visible.set(false);
+                if self.runtime.mode == Mode::UpdateDownload
+                    && self.runtime.session.is_some()
+                    && self.runtime.form.is_none()
+                    && self.browser_origin.is_none()
+                {
+                    // The visible consent covers both stages. Lock before spawning.
+                    self.lock();
+                    match staged.apply(&self.path, self.settings_file.as_deref(), self.lock_after) {
+                        Ok(()) => self.exit = true,
+                        Err(_) => self.error(self.tr("Update could not start. Vault is locked; installation unchanged. Unlock and retry.", "Не удалось начать обновление. Хранилище заблокировано; установка не изменена. Разблокируйте и повторите.")),
+                    }
                 }
             }
             Err(_) => self.error(self.tr(
@@ -84,31 +79,21 @@ impl App {
         true
     }
     pub(super) fn install_text(&self) -> String {
-        if self.runtime.mode == Mode::UpdateInstall {
-            let Some(staged) = &self.runtime.staged_update else {
-                return String::new();
-            };
-            localized!(self.language,
-                "INSTALL version {}?\nDestination:\n{}\n\nOfficial release ZIP verified against SHA256SUMS.txt.\nUNSIGNED: checksums are not publisher signatures.\nReplace only owned program files and the owned browser-host copy.\nVaults, backups, settings, browser config, registry and PATH are untouched.\nClose browser bridge processes before continuing.\nVault and clipboard will be cleared; TermVault will EXIT.\nRollback is attempted on failure. No administrator rights or auto-relaunch.\nReopen TermVault yourself; reload the unpacked browser extension.\n\n[Enter] Install and exit   [Esc] Cancel and remove staging",
-                "УСТАНОВИТЬ версию {}?\nКаталог:\n{}\n\nОфициальный ZIP проверен по SHA256SUMS.txt.\nБЕЗ ПОДПИСИ: контрольные суммы не являются подписью издателя.\nЗаменяются только файлы программы и принадлежащая ей копия браузерного хоста.\nБазы, бэкапы, настройки, конфиг браузера, реестр и PATH не меняются.\nЗакройте процессы браузерного моста перед продолжением.\nХранилище и буфер будут очищены; TermVault ЗАВЕРШИТСЯ.\nПри ошибке выполняется откат. Без прав администратора и автозапуска.\nОткройте TermVault сами; перезагрузите распакованное расширение.\n\n[Enter] Установить и выйти   [Esc] Отмена и удаление подготовки",
-                staged.version, input::display(&staged.destination.display().to_string()))
-        } else {
-            let version = match &self.update_result {
-                Some(UpdateStatus::Available(v)) => v.as_str(),
-                _ => "",
-            };
-            let progress = if self.runtime.download_rx.is_some() {
-                self.tr(
-                    "\nDownload running; Enter does nothing.",
-                    "\nИдёт скачивание; Enter ничего не делает.",
+        if self.runtime.download_rx.is_some() {
+            return self
+                .tr(
+                    "Downloading and verifying…\n\n[Esc] Cancel installation",
+                    "Скачивание и проверка…\n\n[Esc] Отменить установку",
                 )
-            } else {
-                ""
-            };
-            localized!(self.language,
-                "DOWNLOAD version {version} from official TermVault GitHub releases?\n\nGitHub/release asset hosts receive your IP and application User-Agent.\nNo vault data, credentials, paths or sites are sent.\nHTTPS only; bounded downloads and redirects restricted to GitHub asset hosts.\nExact Windows x86_64 ZIP + SHA256SUMS.txt; complete payload allowlist.\nUNSIGNED: checksums detect corruption, NOT a compromised publisher.\nNetwork download does NOT authorize installation.\nA SEPARATE final install confirmation follows verification.\nNo startup checks, no automatic installation.\n{progress}\n[Enter] Download and verify   [Esc] Cancel",
-                "СКАЧАТЬ версию {version} из официальных релизов TermVault на GitHub?\n\nGitHub/серверы файлов получат IP и User-Agent приложения.\nБаза, пароли, пути и сайты не отправляются.\nТолько HTTPS; ограничены размеры, редиректы — лишь серверы GitHub.\nТочный ZIP Windows x86_64 + SHA256SUMS.txt; полный список файлов.\nБЕЗ ПОДПИСИ: суммы выявляют повреждение, НЕ взлом издателя.\nРазрешение скачивания НЕ разрешает установку.\nПосле проверки потребуется ОТДЕЛЬНОЕ подтверждение установки.\nБез проверок при запуске и автоматической установки.\n{progress}\n[Enter] Скачать и проверить   [Esc] Отмена")
+                .into();
         }
+        let version = match &self.update_result {
+            Some(UpdateStatus::Available(v)) => v.as_str(),
+            _ => "",
+        };
+        localized!(self.language,
+                "Download and install version {version}, then restart?\n\nGitHub receives your IP and app version, not vault data.\nThe ZIP is unsigned; SHA-256 is not a publisher signature.\nClose active browser fill dialogs. Only owned app and bridge files change.\nVaults and settings stay intact. After restart, unlock again.\n\n[Enter] Download, install and restart   [Esc] Cancel",
+                "Скачать и установить версию {version}, затем перезапустить?\n\nGitHub получит IP и версию приложения, но не данные базы.\nZIP не подписан; SHA-256 не заменяет подпись издателя.\nЗакройте диалоги автозаполнения. Меняются только файлы приложения и моста.\nБазы и настройки сохраняются. После перезапуска разблокируйте базу.\n\n[Enter] Скачать, установить и перезапустить   [Esc] Отмена")
     }
 }
 
@@ -155,21 +140,12 @@ mod tests {
         sender
             .send(Ok(updates::StagedUpdate::for_test(directory)))
             .unwrap();
-        assert!(app.poll_download());
         path
     }
     #[test]
-    fn worker_completion_requires_separate_new_visible_install_consent_and_resize_revokes_it() {
+    fn update_requires_visible_consent_and_cancellation_drops_the_worker_result() {
         let (_root, mut app) = fixture();
-        // An injected worker result avoids all HTTP and does not authorize apply.
         app.runtime.mode = Mode::UpdateDownload;
-        app.render.install_visible.set(true);
-        let stage = deliver_staged(&mut app);
-        assert_eq!(app.runtime.mode, Mode::UpdateInstall);
-        assert!(!app.render.install_visible.get());
-        enter(&mut app);
-        assert!(stage.exists());
-        assert!(app.runtime.session.is_some());
         for language in [Language::English, Language::Russian] {
             app.language = language;
             let text = draw(&app, 120, 50);
@@ -179,10 +155,12 @@ mod tests {
         draw(&app, 50, 10);
         assert!(!app.render.install_visible.get());
         enter(&mut app);
-        assert!(stage.exists());
+        assert!(app.runtime.download_rx.is_none());
+        let stage = deliver_staged(&mut app);
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!stage.exists());
-        assert!(app.runtime.staged_update.is_none());
+        assert!(app.runtime.session.is_some());
+        assert!(!app.poll_download());
         assert_eq!(app.runtime.mode, Mode::Browse);
     }
     #[test]
@@ -191,8 +169,6 @@ mod tests {
             let (_root, mut app) = fixture();
             app.runtime.mode = Mode::UpdateDownload;
             let stage = deliver_staged(&mut app);
-            let (sender, receiver) = std::sync::mpsc::channel();
-            app.runtime.download_rx = Some(receiver);
             match action {
                 "lock" => app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL)),
                 "quit" => app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
@@ -202,9 +178,7 @@ mod tests {
             }
             assert!(!stage.exists());
             assert!(app.runtime.session.is_none());
-            assert!(app.runtime.staged_update.is_none());
             assert!(app.runtime.download_rx.is_none());
-            assert!(sender.send(Err("cancelled".into())).is_err());
         }
     }
     #[test]
@@ -239,12 +213,10 @@ mod tests {
             .unwrap();
         app.runtime.mode = Mode::UpdateDownload;
         let stage = deliver_staged(&mut app);
-        draw(&app, 120, 50);
         // The test harness is not an installed tvault.exe, so apply's ownership
         // preflight fails before spawning anything or touching program files.
-        enter(&mut app);
+        assert!(app.poll_download());
         assert!(app.runtime.session.is_none());
-        assert!(app.runtime.staged_update.is_none());
         assert!(!stage.exists());
         assert!(!app.exit);
         assert!(!app.status.contains("PRIVATE_CLIPBOARD"));

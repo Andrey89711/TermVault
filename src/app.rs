@@ -67,7 +67,6 @@ enum Mode {
     UpdateConsent,
     UpdateResult,
     UpdateDownload,
-    UpdateInstall,
     Csv,
     NewFolder,
     DeleteFolder,
@@ -1084,6 +1083,13 @@ impl App {
                     _ => status.description(self.language),
                 });
                 self.update_result = Some(status);
+                if cfg!(all(windows, target_arch = "x86_64"))
+                    && self.runtime.palette.is_none()
+                    && self.language_choice.is_none()
+                    && self.command_allowed(Command::InstallUpdate, Invocation::Palette)
+                {
+                    self.open_update_download();
+                }
             }
             Err(error) => self.error(error),
         }
@@ -1092,7 +1098,6 @@ impl App {
     fn tick(&mut self, now: Instant) -> bool {
         self.clipboard.tick(now);
         let mut changed = self.poll_update();
-        changed |= self.poll_download();
         if self.status_until.is_some_and(|deadline| now >= deadline) {
             self.clear_notice();
             changed = true;
@@ -1107,6 +1112,7 @@ impl App {
             ));
             return true;
         }
+        changed |= self.poll_download();
         if self
             .runtime
             .reveal_until
@@ -1174,7 +1180,7 @@ impl App {
                 self.csv_key(key);
                 return;
             }
-            Mode::UpdateDownload | Mode::UpdateInstall => {
+            Mode::UpdateDownload => {
                 self.update_install_key(key);
                 return;
             }
@@ -1266,8 +1272,15 @@ impl App {
                 return;
             }
             Mode::UpdateResult => {
-                if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+                if key.code == KeyCode::Esc {
                     self.close_update_dialog();
+                } else if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
+                    self.close_update_dialog();
+                    if self.command_allowed(Command::InstallUpdate, Invocation::Palette)
+                        && cfg!(all(windows, target_arch = "x86_64"))
+                    {
+                        self.open_update_download();
+                    }
                 }
                 return;
             }
@@ -1358,8 +1371,7 @@ impl App {
             | Mode::UpdateConsent
             | Mode::UpdateResult
             | Mode::Csv
-            | Mode::UpdateDownload
-            | Mode::UpdateInstall => {}
+            | Mode::UpdateDownload => {}
             Mode::BrowserConfirm => {}
             Mode::Edit => {
                 if ctrl && letter == Some('s') {

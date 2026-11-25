@@ -39,8 +39,8 @@ credentials. Passwords remain masked in documentation screenshots.
 
 ## Build and run
 
-The current release is [v0.1.4](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.4):
-download `termvault-0.1.4-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
+The current release is [v0.1.5](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.5):
+download `termvault-0.1.5-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
 Extract the complete ZIP and run **`setup.cmd`**, not `setup.ps1` directly.
 The launcher applies `ExecutionPolicy Bypass` only to its child PowerShell process;
 it does not change your saved execution policy. Organization-managed policies may
@@ -240,17 +240,17 @@ it in a shared/cloud-synced folder or open untrusted values in a spreadsheet.
 - Update checks and downloads run only after explicit user consent. GitHub sees the
   client IP and `TermVault/<version>` User-Agent, not vault paths, credentials or
   current sites. There are no startup or scheduled update requests.
-- The Windows updater stages the official release package in the background and
-  checks its SHA-256 and allowed archive contents before asking separately to install.
-  Only explicit installation approval may close the application and start the update
-  helper. Finish your draft before installation. Vaults, backups and settings must
-  remain outside the program-file replacement operation.
+- On Windows x64, one visible approval covers download, verification,
+  installation and restart. The updater checks the official package's SHA-256
+  and owned file list, then locks the vault and replaces program files after exit.
+  Esc cancels installation during download. Finish your draft before installation.
+  Vaults, backups and settings are not replaced.
 - In-app installation currently requires a complete setup-installed Windows x86_64
   package and a newer stable release. The first version containing this updater
   must be installed once through `setup.cmd`; older check-only versions cannot
   acquire a new installer automatically. Portable/non-Windows installations use
-  the release page. Reopen TermVault and reload an unpacked browser extension after
-  installation; the update helper does not restart them automatically.
+  the release page. TermVault restarts locked after installation; reload an unpacked
+  browser extension separately if you use it.
 - Packages are unsigned. Checksums fetched from the same GitHub release detect
   mismatches but **do not independently authenticate the publisher**. Only approve
   updates when you trust the repository and your local account. Restricted corporate

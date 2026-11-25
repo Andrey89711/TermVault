@@ -39,8 +39,8 @@ credentials. Passwords remain masked in documentation screenshots.
 
 ## Build and run
 
-The current release is [v0.1.3](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.3):
-download `termvault-0.1.3-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
+The current release is [v0.1.4](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.4):
+download `termvault-0.1.4-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
 Extract the complete ZIP and run **`setup.cmd`**, not `setup.ps1` directly.
 The launcher applies `ExecutionPolicy Bypass` only to its child PowerShell process;
 it does not change your saved execution policy. Organization-managed policies may
@@ -128,6 +128,7 @@ reauthenticated action in the terminal UI, never a password-bearing CLI option.
 | ↑ / ↓ | Select folder or entry |
 | ← / → | Collapse / expand folders; move to parent / first child |
 | `/` | Filter entry titles; Enter applies, Esc clears |
+| Ctrl+F | Search titles, usernames, URLs and notes; Enter applies, Esc clears |
 | `n` | New entry |
 | `g` | New entry with a generated 24-character password |
 | `f` | Open the folder picker (including All entries and `/`, the root) |
@@ -151,7 +152,7 @@ reauthenticated action in the terminal UI, never a password-bearing CLI option.
 | Esc in form | Return, confirming if unsaved |
 
 Paste using your terminal's paste action (often Ctrl+Shift+V). Bracketed paste is
-supported; multiline paste is accepted only in Notes. Ctrl+S/L/Q/G/P/O also recognize
+supported; multiline paste is accepted only in Notes. Ctrl+S/L/Q/G/P/O/F also recognize
 the corresponding standard Russian keyboard characters. Single-letter commands
 and confirmations currently use EN. The form does not have undo/redo.
 
@@ -177,8 +178,12 @@ under the selected folder (or alongside the selected record). Editing an existin
 record preserves its folder. Use `m` or **Move entry to folder** to move it.
 
 The `f` picker remains as a quick jump to a folder; All entries returns to the tree.
-Title search spans all folders, including collapsed ones, and displays a flat result
-list. Browser approval also stays a flat, origin-filtered list. Mouse wheel navigation
+Both `/` and Ctrl+F match case-insensitive substrings across all folders, including
+collapsed ones. `/` (and the palette's title filter) only checks titles. Ctrl+F
+also checks usernames, URLs and notes, never passwords. Its flat result list
+shows titles only; open a result to see the entry. Search runs locally in memory
+while unlocked, without a saved index or query history, and is unavailable in
+browser approval. Browser approval stays a flat, origin-filtered list. Mouse wheel navigation
 is supported in the Explorer; use your terminal's selection override (often Shift)
 to select terminal text while mouse capture is enabled.
 

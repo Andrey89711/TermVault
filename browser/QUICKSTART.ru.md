@@ -6,7 +6,7 @@ This guide is in English; its historical filename is retained for existing links
    Compare the archive's SHA-256 with the checksum file:
 
    ```powershell
-   Get-FileHash .\termvault-0.1.3-windows-x86_64.zip -Algorithm SHA256
+   Get-FileHash .\termvault-0.1.4-windows-x86_64.zip -Algorithm SHA256
    ```
 
    The filename depends on the version. Do not run the program if hashes differ.

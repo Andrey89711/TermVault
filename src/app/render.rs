@@ -202,6 +202,7 @@ impl App {
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
                 .split(rows[1]);
+            let field_search = self.field_search_active();
             if self.explorer_active() {
                 self.draw_explorer(frame, parts[0]);
             } else {
@@ -221,7 +222,11 @@ impl App {
                                 " {} · {} · {} ",
                                 self.tr("Entries", "Записи"),
                                 self.runtime.visible.len(),
-                                self.folder_label()
+                                if field_search {
+                                    self.tr("All folders", "Все папки").into()
+                                } else {
+                                    self.folder_label()
+                                }
                             ))
                             .padding(Padding::new(0, 0, 1, 0)),
                         )
@@ -233,10 +238,20 @@ impl App {
                     ),
                 );
             }
-            let data = self
-                .selected_id()
+            let data = (!field_search)
+                .then(|| self.selected_id())
+                .flatten()
                 .and_then(|id| self.runtime.session.as_ref()?.entry(id));
-            let text = if let Some(data) = data {
+            let text = if field_search {
+                vec![Line::from(if self.runtime.visible.is_empty() {
+                    self.tr("No matching entries.", "Нет подходящих записей.")
+                } else {
+                    self.tr(
+                        "Results show titles only. Open an entry or press Esc to clear.",
+                        "Показаны только названия. Откройте запись или нажмите Esc для сброса.",
+                    )
+                })]
+            } else if let Some(data) = data {
                 let password = if self.runtime.reveal_until.is_some() {
                     input::display(&data.password)
                 } else {
@@ -338,10 +353,14 @@ impl App {
             frame.render_widget(
                 Paragraph::new(text)
                     .block(
-                        panel(self.tr(
-                            " Entry · passwords hidden by default ",
-                            " Запись · пароли скрыты по умолчанию ",
-                        ))
+                        panel(if field_search {
+                            self.tr(" Search results ", " Результаты поиска ")
+                        } else {
+                            self.tr(
+                                " Entry · passwords hidden by default ",
+                                " Запись · пароли скрыты по умолчанию ",
+                            )
+                        })
                         .padding(Padding::new(0, 0, 1, 0)),
                     )
                     .wrap(Wrap { trim: false }),
@@ -365,10 +384,12 @@ impl App {
                 self.tr(" ↑↓ select · Enter review · y approve in confirmation · Esc cancel ", " ↑↓ выбор · Enter проверить · y одобрить в диалоге · Esc отмена ")
             } else if self.runtime.form.is_some() {
                 self.tr(" Ctrl+P commands · Ctrl+O reveal · Tab field · Ctrl+S save · Esc back ", " Ctrl+P команды · Ctrl+O показать · Tab поле · Ctrl+S сохранить · Esc назад ")
+            } else if self.field_search_active() {
+                self.tr(" Ctrl+F search · ↑↓ select · Enter · Esc clear ", " Ctrl+F поиск · ↑↓ выбор · Enter · Esc сброс ")
             } else if self.explorer_active() {
-                self.tr(" Ctrl+P commands · ↑↓ select · ←→ folders · Enter open/edit · Delete remove · n new entry ", " Ctrl+P команды · ↑↓ выбор · ←→ папки · Enter открыть · Delete удалить · n новая запись ")
+                self.tr(" Ctrl+F search · Ctrl+P commands · ↑↓ select · ←→ folders · Enter open/edit ", " Ctrl+F поиск · Ctrl+P команды · ↑↓ выбор · ←→ папки · Enter открыть ")
             } else {
-                self.tr(" Ctrl+P commands · Ctrl+O reveal · ↑↓ select · Enter edit · Ctrl+L lock ", " Ctrl+P команды · Ctrl+O показать · ↑↓ выбор · Enter изменить · Ctrl+L блокировка ")
+                self.tr(" Ctrl+F search · Ctrl+P commands · ↑↓ select · Enter edit · Ctrl+L lock ", " Ctrl+F поиск · Ctrl+P команды · ↑↓ выбор · Enter изменить · Ctrl+L блокировка ")
             })
             .style(base().fg(theme::MUTED)),
             rows[2],
@@ -407,7 +428,25 @@ impl App {
                 self.render.browser_review_visible.set(true);
                 popup(frame, &localized!(self.language, "Send login and password for:\n{title}\nTo: {}\n\n[y] Approve once   [n] Back   [Esc] Cancel", "Отправить логин и пароль записи:\n{title}\nСайту: {}\n\n[y] Одобрить один раз   [n] Назад   [Esc] Отмена", self.browser_origin.as_deref().unwrap_or("")), self.tr(" Confirm browser fill ", " Подтвердить автозаполнение "), 18);
             }
-            Mode::Search=>popup(frame,&localized!(self.language, "{}\nEnter applies · Esc clears", "{}\nEnter применить · Esc очистить", if self.runtime.query.text().is_empty() { self.tr("Search entry titles…", "Поиск по названиям…").to_owned() } else { self.runtime.query.rendered(false,true) }),self.tr(" Filter entry titles ", " Поиск по названиям "),5),
+            Mode::Search => {
+                let (title, hint) = if self.runtime.search_scope == SearchScope::Fields {
+                    (
+                        self.tr(" Search all folders ", " Поиск по всем папкам "),
+                        self.tr("Title, username, URL, notes…", "Название, логин, URL, заметки…"),
+                    )
+                } else {
+                    (
+                        self.tr(" Filter entry titles ", " Поиск по названиям "),
+                        self.tr("Search entry titles…", "Поиск по названиям…"),
+                    )
+                };
+                let query = if self.runtime.query.text().is_empty() {
+                    hint.to_owned()
+                } else {
+                    self.runtime.query.rendered(false, true)
+                };
+                popup(frame, &localized!(self.language, "{query}\nEnter applies · Esc clears", "{query}\nEnter применить · Esc очистить"), title, 5);
+            }
             Mode::Discard(_)=>popup(frame,self.tr("Unsaved changes\n\n[s] Save and continue   [d] Discard   [c/Esc] Cancel\nInactivity auto-lock discards unsaved drafts.", "Несохранённые изменения\n\n[s] Сохранить и продолжить   [d] Отбросить   [c/Esc] Отмена\nАвтоблокировка удаляет несохранённые черновики."),self.tr(" Unsaved entry ", " Несохранённая запись "),7),
             Mode::Delete=>popup(frame,self.tr("Delete the selected entry?\n\n[d] Delete   [Esc] Cancel\nEncrypted backups retain previous versions; this is not secure erasure.", "Удалить выбранную запись?\n\n[d] Удалить   [Esc] Отмена\nЗашифрованные бэкапы хранят прежние версии; это не безопасное стирание."),self.tr(" Confirm deletion ", " Подтвердить удаление "),7),
             _=>{}

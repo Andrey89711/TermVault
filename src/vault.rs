@@ -233,6 +233,21 @@ impl Session {
             notes: Zeroizing::new(entry.get(fields::NOTES).unwrap_or("").into()),
         })
     }
+    /// Search only these four fields of the current entry, not passwords,
+    /// custom fields, or entry history. The caller folds the query once.
+    pub fn matches_search(&self, id: EntryId, lowercase_query: &str) -> bool {
+        self.db.entry(id).is_some_and(|entry| {
+            [
+                entry.get_title(),
+                entry.get_username(),
+                entry.get_url(),
+                entry.get(fields::NOTES),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|field| Zeroizing::new(field.to_lowercase()).contains(lowercase_query))
+        })
+    }
     pub fn root_folder(&self) -> GroupId {
         self.db.root().id()
     }

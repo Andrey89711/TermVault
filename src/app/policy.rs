@@ -101,7 +101,9 @@ impl App {
             Command::Unlock => false,
             Command::Back => editing || self.runtime.mode == Mode::Search,
             Command::SaveEntry | Command::GeneratePassword => editing && !session.readonly,
-            Command::RevealPassword => editing || (browsing && self.selected_id().is_some()),
+            Command::RevealPassword => {
+                editing || (browsing && !self.field_search_active() && self.selected_id().is_some())
+            }
             Command::CopyPassword | Command::CopyUsername => {
                 browsing && self.selected_id().is_some()
             }

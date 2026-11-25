@@ -74,6 +74,13 @@ enum Mode {
     Folders(bool), // true: move the selected entry, false: browse a folder.
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum SearchScope {
+    #[default]
+    Title,
+    Fields,
+}
+
 struct Form {
     id: Option<EntryId>,
     fields: [Input; 5],
@@ -457,14 +464,26 @@ impl App {
         (folder != self.runtime.session.as_ref()?.root_folder()).then_some(folder)
     }
     fn filter(&mut self, preferred: Option<EntryId>) {
-        let query = self.runtime.query.text().to_lowercase();
+        let query = Zeroizing::new(self.runtime.query.text().to_lowercase());
         self.runtime.visible = self
             .runtime
             .entries
             .iter()
             .enumerate()
             .filter(|(_, (id, title))| {
-                self.entry_label(*id, title).to_lowercase().contains(&query)
+                let matches_query = query.is_empty()
+                    || if self.runtime.search_scope == SearchScope::Fields
+                        && self.browser_origin.is_none()
+                    {
+                        self.runtime
+                            .session
+                            .as_ref()
+                            .is_some_and(|session| session.matches_search(*id, &query))
+                    } else {
+                        Zeroizing::new(self.entry_label(*id, title).to_lowercase())
+                            .contains(query.as_str())
+                    };
+                matches_query
                     && (self.browser_origin.is_some()
                         || !query.is_empty()
                         || self.runtime.folder.is_none_or(|folder| {
@@ -494,6 +513,23 @@ impl App {
             .unwrap_or(0);
         self.runtime.reveal_until = None;
         self.sync_explorer(preferred);
+    }
+    fn start_search(&mut self, scope: SearchScope) {
+        self.runtime.mode = Mode::Search;
+        self.runtime.reveal_until = None;
+        if self.runtime.search_scope != scope {
+            self.runtime.search_scope = scope;
+            self.filter(None);
+        }
+    }
+    fn clear_search(&mut self) {
+        self.runtime.query.clear();
+        self.runtime.search_scope = SearchScope::Title;
+    }
+    fn field_search_active(&self) -> bool {
+        self.browser_origin.is_none()
+            && self.runtime.search_scope == SearchScope::Fields
+            && (self.runtime.mode == Mode::Search || !self.runtime.query.text().is_empty())
     }
     fn selected_id(&self) -> Option<EntryId> {
         if self.explorer_active() {
@@ -614,7 +650,7 @@ impl App {
             Ok(id) => {
                 self.runtime.form = None;
                 self.runtime.mode = Mode::Browse;
-                self.runtime.query.clear();
+                self.clear_search();
                 self.refresh(Some(id));
                 self.info(self.tr("Entry saved", "Запись сохранена"));
                 true
@@ -674,6 +710,7 @@ impl App {
         if self.browser_origin.is_some()
             || self.runtime.session.is_none()
             || !matches!(self.runtime.mode, Mode::Browse | Mode::Edit)
+            || (self.runtime.mode == Mode::Browse && self.field_search_active())
             || (self.runtime.form.is_none() && self.selected_id().is_none())
         {
             return;
@@ -734,7 +771,7 @@ impl App {
                 self.generate();
             }
             Command::EditEntry => self.edit(false),
-            Command::SearchEntries => self.runtime.mode = Mode::Search,
+            Command::SearchEntries => self.start_search(SearchScope::Title),
             Command::CopyPassword => self.copy(false),
             Command::CopyUsername => self.copy(true),
             Command::RevealPassword => self.toggle_reveal(),
@@ -748,7 +785,7 @@ impl App {
             Command::GeneratePassword => self.generate(),
             Command::Back => {
                 if self.runtime.mode == Mode::Search {
-                    self.runtime.query.clear();
+                    self.clear_search();
                     self.filter(None);
                 }
                 self.leave(Action::Browse);
@@ -829,7 +866,7 @@ impl App {
                 self.expand_ancestors(id);
                 self.runtime.explorer_focus = Some(ExplorerNode::Folder(id));
                 self.runtime.folder_name.clear();
-                self.runtime.query.clear();
+                self.clear_search();
                 self.runtime.mode = Mode::Browse;
                 self.refresh(None);
                 self.info(self.tr("Folder created", "Папка создана"));
@@ -854,7 +891,7 @@ impl App {
                 self.runtime.pending_folder_delete = None;
                 self.runtime.folder = Some(parent);
                 self.runtime.explorer_focus = Some(ExplorerNode::Folder(parent));
-                self.runtime.query.clear();
+                self.clear_search();
                 self.runtime.mode = Mode::Browse;
                 self.refresh(None);
                 self.warning(self.tr(
@@ -902,7 +939,7 @@ impl App {
         if let Some(folder) = folder {
             self.expand_ancestors(folder);
         }
-        self.runtime.query.clear();
+        self.clear_search();
         self.runtime.mode = Mode::Browse;
         self.refresh(preferred);
     }
@@ -1094,6 +1131,7 @@ impl App {
                 'п' => 'g',
                 'з' => 'p',
                 'щ' => 'o',
+                'а' => 'f',
                 c => c,
             }),
             _ => None,
@@ -1298,6 +1336,14 @@ impl App {
             }
             return;
         }
+        if ctrl && letter == Some('f') {
+            if matches!(self.runtime.mode, Mode::Browse | Mode::Search)
+                && self.runtime.form.is_none()
+            {
+                self.start_search(SearchScope::Fields);
+            }
+            return;
+        }
         if ctrl && letter == Some('o') {
             self.execute_shortcut(Command::RevealPassword);
             return;
@@ -1395,7 +1441,7 @@ impl App {
                 KeyCode::Char('q') => self.execute_shortcut(Command::Quit),
                 KeyCode::Char('/') => self.execute_shortcut(Command::SearchEntries),
                 KeyCode::Esc => {
-                    self.runtime.query.clear();
+                    self.clear_search();
                     self.filter(None);
                     self.runtime.reveal_until = None;
                 }
@@ -2175,6 +2221,157 @@ mod tests {
         app.refresh(None);
         app.select_explorer(ExplorerNode::Folder(work));
         (root, app, work, mail, id)
+    }
+
+    #[test]
+    fn ctrl_f_matches_allowed_fields_in_collapsed_folders_without_rendering_values() {
+        let (_root, mut app, work, _, id) = explorer_fixture();
+        let session = app.runtime.session.as_mut().unwrap();
+        let mut entry = session.entry(id).unwrap();
+        *entry.username = "Пользователь".into();
+        *entry.notes = "First line\nСекретная заметка".into();
+        session.update(Some(id), &entry).unwrap();
+        app.refresh(None);
+        assert!(!app.runtime.expanded_folders.contains(&work));
+        assert!(!screen(&app).contains("Nested login"));
+        let bytes = std::fs::read(&app.path).unwrap();
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        app.runtime.reveal_until = Some(Instant::now() + Duration::from_secs(10));
+        app.key(ctrl('f'));
+        assert_eq!(app.runtime.mode, Mode::Search);
+        assert_eq!(app.runtime.search_scope, SearchScope::Fields);
+        assert!(app.runtime.reveal_until.is_none());
+        assert!(screen(&app).contains("Title, username, URL, notes"));
+        for query in ["StEd lo", "ЬЗОВА", "AmPlE.Te", "НАЯ ЗАМ"] {
+            app.key(ctrl('u'));
+            app.paste(query);
+            assert_eq!(app.selected_id(), Some(id), "query: {query}");
+            assert!(!app.explorer_active());
+            let text = screen(&app);
+            for value in [
+                "Пользователь",
+                "https://example.test",
+                "Секретная заметка",
+                "TREE_DUMMY_SECRET",
+            ] {
+                assert!(!text.contains(value), "rendered {value}");
+            }
+        }
+        app.key(plain(KeyCode::Enter));
+        assert_eq!(app.runtime.mode, Mode::Browse);
+        app.key(ctrl('o'));
+        assert!(app.runtime.reveal_until.is_none());
+        assert!(screen(&app).contains("Nested login"));
+        assert!(screen(&app).contains("Results show titles only"));
+
+        app.key(ctrl('f'));
+        app.key(ctrl('u'));
+        app.paste("dummy_secr");
+        assert!(app.runtime.visible.is_empty());
+        assert!(screen(&app).contains("No matching entries."));
+        app.key(plain(KeyCode::Esc));
+        assert!(app.runtime.query.text().is_empty());
+        assert!(app.explorer_active());
+        assert_eq!(app.runtime.explorer_focus, Some(ExplorerNode::Folder(work)));
+        assert_eq!(std::fs::read(&app.path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn ctrl_f_switches_scope_from_slash_search_and_slash_stays_title_only() {
+        let (_root, mut app, _, _, id) = explorer_fixture();
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.language = Language::Russian;
+        app.key(plain(KeyCode::Char('/')));
+        app.paste("example");
+        assert!(app.runtime.visible.is_empty());
+        assert!(screen(&app).contains("Поиск по названиям"));
+
+        app.key(KeyEvent::new(KeyCode::Char('а'), KeyModifiers::CONTROL));
+        assert_eq!(app.runtime.mode, Mode::Search);
+        assert_eq!(app.runtime.query.text(), "example");
+        assert_eq!(app.selected_id(), Some(id));
+        assert!(screen(&app).contains("Поиск по всем папкам"));
+        app.key(plain(KeyCode::Enter));
+        app.key(plain(KeyCode::Char('/')));
+        assert_eq!(app.runtime.search_scope, SearchScope::Title);
+        assert_eq!(app.runtime.query.text(), "example");
+        assert!(app.runtime.visible.is_empty());
+        app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        app.paste("stED LOG");
+        app.key(plain(KeyCode::Enter));
+        assert_eq!(app.runtime.mode, Mode::Browse);
+        assert_eq!(app.selected_id(), Some(id));
+        app.key(plain(KeyCode::Esc));
+        assert!(app.explorer_active());
+        app.key(plain(KeyCode::Char('f')));
+        assert_eq!(app.runtime.mode, Mode::Folders(false));
+    }
+
+    #[test]
+    fn ctrl_f_does_not_interfere_with_drafts_modals_browser_approval_or_lock() {
+        let (_root, mut app, _, _, id) = explorer_fixture();
+        let ctrl_f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        app.open_palette();
+        app.key(ctrl_f);
+        assert!(app.runtime.palette.is_some());
+        assert_eq!(app.runtime.mode, Mode::Browse);
+        app.key(plain(KeyCode::Esc));
+        app.language_choice = Some(0);
+        app.key(ctrl_f);
+        assert_eq!(app.language_choice, Some(0));
+        app.key(plain(KeyCode::Esc));
+
+        app.key(plain(KeyCode::Char('n')));
+        app.paste("Keep this draft");
+        app.key(ctrl_f);
+        assert_eq!(app.runtime.mode, Mode::Edit);
+        app.key(plain(KeyCode::Esc));
+        app.key(ctrl_f);
+        assert_eq!(app.runtime.mode, Mode::Discard(Action::Browse));
+        let form = app.runtime.form.as_ref().unwrap();
+        assert!(form.dirty);
+        assert_eq!(form.fields[0].text(), "Keep this draft");
+        app.key(plain(KeyCode::Char('d')));
+        app.execute_shortcut(Command::CheckUpdates);
+        app.key(ctrl_f);
+        assert_eq!(app.runtime.mode, Mode::UpdateConsent);
+        assert!(app.runtime.update_rx.is_none());
+        app.key(plain(KeyCode::Esc));
+        app.execute_shortcut(Command::ChangeMaster);
+        app.paste("Keep this masked draft");
+        app.key(ctrl_f);
+        assert_eq!(app.runtime.mode, Mode::VaultAction);
+        assert!(app.runtime.sensitive.is_some());
+        app.key(plain(KeyCode::Esc));
+
+        app.browser_origin = Some("https://example.test".into());
+        app.filter(None);
+        app.key(ctrl_f);
+        assert_eq!(app.runtime.mode, Mode::Browse);
+        assert_eq!(app.selected_id(), Some(id));
+        app.key(plain(KeyCode::Enter));
+        screen(&app);
+        app.key(ctrl_f);
+        assert_eq!(app.runtime.mode, Mode::BrowserConfirm);
+        assert!(app.render.browser_review_visible.get());
+        assert!(app.browser_credentials.is_none());
+        app.key(plain(KeyCode::Char('n')));
+        app.browser_origin = None;
+        app.key(ctrl_f);
+        app.paste("example");
+        app.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        app.paste("Masked master draft");
+        app.key(ctrl_f);
+        assert!(app.runtime.session.is_none());
+        assert_eq!(app.runtime.mode, Mode::Browse);
+        assert_eq!(app.runtime.search_scope, SearchScope::Title);
+        assert!(app.runtime.query.text().is_empty());
+        assert!(app.runtime.visible.is_empty());
+        assert_eq!(app.runtime.master.text(), "Masked master draft");
     }
 
     #[test]

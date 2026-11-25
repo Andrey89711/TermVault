@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4
+
+- Ctrl+F searches titles, usernames, URLs and notes across folders without
+  matching case. Passwords are excluded, and results show entry titles only.
+- `/` remains a title-only filter; the new shortcut is available in the unlocked
+  vault without interrupting drafts, browser approval or consent dialogs.
+
 ## 0.1.3
 
 - User-consented Windows in-app update download, package verification and separate

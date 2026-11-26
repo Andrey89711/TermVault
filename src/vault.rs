@@ -371,17 +371,25 @@ impl Session {
         Ok(parent)
     }
     pub fn move_entry(&mut self, id: EntryId, folder: GroupId) -> Result<()> {
+        self.move_entries(&[id], folder)
+    }
+    pub fn move_entries(&mut self, ids: &[EntryId], folder: GroupId) -> Result<()> {
         if self.readonly {
             bail!("Foreign vault is read-only");
+        }
+        if ids.is_empty() {
+            return Ok(());
         }
         if self.db.group(folder).is_none() {
             bail!("Destination folder no longer exists");
         }
         let mut candidate = self.db.clone();
-        candidate
-            .entry_mut(id)
-            .context("Entry no longer exists")?
-            .move_to(folder)?;
+        for &id in ids {
+            candidate
+                .entry_mut(id)
+                .context("Entry no longer exists")?
+                .move_to(folder)?;
+        }
         self.commit(candidate)
     }
     pub fn update(&mut self, id: Option<EntryId>, data: &EntryData) -> Result<EntryId> {
@@ -428,14 +436,22 @@ impl Session {
         Ok(entry_id)
     }
     pub fn delete(&mut self, id: EntryId) -> Result<()> {
+        self.delete_entries(&[id])
+    }
+    pub fn delete_entries(&mut self, ids: &[EntryId]) -> Result<()> {
         if self.readonly {
             bail!("Foreign vault is read-only in this MVP");
         }
+        if ids.is_empty() {
+            return Ok(());
+        }
         let mut candidate = self.db.clone();
-        candidate
-            .entry_mut(id)
-            .context("Entry no longer exists")?
-            .remove();
+        for &id in ids {
+            candidate
+                .entry_mut(id)
+                .context("Entry no longer exists")?
+                .remove();
+        }
         self.commit(candidate)
     }
     /// Append only; a failed validation/save leaves the live database unchanged.
@@ -993,6 +1009,24 @@ mod tests {
             .contains("resource policy"));
         fs::write(&path, &bytes).unwrap();
         assert!(Session::unlock(&path, MASTER).is_err());
+    }
+
+    #[test]
+    fn invalid_bulk_batches_leave_live_vault_and_backups_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test.kdbx");
+        let mut vault = Session::create(&path, MASTER).unwrap();
+        let target = vault.create_folder(None, "Target").unwrap();
+        let id = vault.update(None, &data()).unwrap();
+        let removed = vault.update(None, &data()).unwrap();
+        vault.delete(removed).unwrap();
+        let before = read(&path).unwrap();
+        let files = fs::read_dir(root.path()).unwrap().count();
+        assert!(vault.move_entries(&[id, removed], target).is_err());
+        assert!(vault.delete_entries(&[id, removed]).is_err());
+        assert_eq!(vault.entry_folder(id), Some(vault.root_folder()));
+        assert_eq!(read(&path).unwrap(), before);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), files);
     }
 
     #[test]

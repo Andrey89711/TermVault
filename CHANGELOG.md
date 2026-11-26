@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6
+
+- Mark multiple entries in the vault tree or search results, then move or
+  delete them in one encrypted save with a backup of the previous state.
+
 ## 0.1.5
 
 - On Windows x64, one approval downloads, verifies and installs an update,

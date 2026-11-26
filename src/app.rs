@@ -59,6 +59,7 @@ enum Mode {
     Search,
     Edit,
     Delete,
+    BulkDelete,
     Discard(Action),
     BrowserConfirm,
     VaultAction,
@@ -71,6 +72,7 @@ enum Mode {
     NewFolder,
     DeleteFolder,
     Folders(bool), // true: move the selected entry, false: browse a folder.
+    BulkMove,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -371,7 +373,7 @@ impl App {
     }
     fn select_explorer(&mut self, node: ExplorerNode) {
         self.runtime.explorer_focus = Some(node);
-        self.runtime.folder = match node {
+        let folder = match node {
             ExplorerNode::Folder(id) => Some(id),
             ExplorerNode::Entry(id) => self
                 .runtime
@@ -379,7 +381,16 @@ impl App {
                 .as_ref()
                 .and_then(|session| session.entry_folder(id)),
         };
+        // In the explorer this tracks the cursor's location, not a new list.
+        // Keep marks when the cursor crosses folders in the same expanded tree.
+        self.runtime.folder = folder;
         self.runtime.reveal_until = None;
+    }
+    fn set_folder(&mut self, folder: Option<GroupId>) {
+        if self.runtime.folder != folder {
+            self.runtime.marked.clear();
+            self.runtime.folder = folder;
+        }
     }
     fn move_explorer(&mut self, delta: isize) {
         let rows = self.explorer_rows();
@@ -395,9 +406,12 @@ impl App {
     }
     fn explorer_right(&mut self, toggle: bool) {
         if let Some(ExplorerNode::Folder(folder)) = self.runtime.explorer_focus {
-            if !self.runtime.expanded_folders.insert(folder) {
+            if self.runtime.expanded_folders.insert(folder) {
+                self.runtime.marked.clear();
+            } else {
                 if toggle {
                     self.runtime.expanded_folders.remove(&folder);
+                    self.runtime.marked.clear();
                 } else {
                     let rows = self.explorer_rows();
                     if let Some(index) = rows
@@ -424,6 +438,7 @@ impl App {
         };
         if let ExplorerNode::Folder(folder) = focus {
             if self.runtime.expanded_folders.remove(&folder) {
+                self.runtime.marked.clear();
                 self.runtime.reveal_until = None;
                 return;
             }
@@ -463,6 +478,7 @@ impl App {
         (folder != self.runtime.session.as_ref()?.root_folder()).then_some(folder)
     }
     fn filter(&mut self, preferred: Option<EntryId>) {
+        self.runtime.marked.clear();
         let query = Zeroizing::new(self.runtime.query.text().to_lowercase());
         self.runtime.visible = self
             .runtime
@@ -547,6 +563,40 @@ impl App {
             .get(self.runtime.selected)
             .map(|i| self.runtime.entries[*i].0)
     }
+    fn can_mark_entries(&self) -> bool {
+        self.runtime.mode == Mode::Browse
+            && self.runtime.form.is_none()
+            && self.browser_origin.is_none()
+            && self
+                .runtime
+                .session
+                .as_ref()
+                .is_some_and(|session| !session.readonly)
+    }
+    fn toggle_mark(&mut self, id: EntryId) {
+        if !self.runtime.marked.remove(&id) {
+            self.runtime.marked.insert(id);
+        }
+        self.runtime.reveal_until = None;
+    }
+    fn mark_all_displayed(&mut self) {
+        self.runtime.marked = if self.explorer_active() {
+            self.explorer_rows()
+                .into_iter()
+                .filter_map(|row| match row.node {
+                    ExplorerNode::Entry(id) => Some(id),
+                    ExplorerNode::Folder(_) => None,
+                })
+                .collect()
+        } else {
+            self.runtime
+                .visible
+                .iter()
+                .map(|i| self.runtime.entries[*i].0)
+                .collect()
+        };
+        self.runtime.reveal_until = None;
+    }
     fn lock(&mut self) {
         self.language_choice = None;
         self.render = RenderFeedback::default();
@@ -589,7 +639,7 @@ impl App {
     }
     fn edit(&mut self, new: bool) {
         if new {
-            self.runtime.folder = self.creation_folder();
+            self.set_folder(self.creation_folder());
         }
         let Some(session) = &self.runtime.session else {
             return;
@@ -742,7 +792,7 @@ impl App {
             Command::Unlock => {} // Return to the masked input; never submit an existing master draft implicitly.
             Command::NewEntry => self.edit(true),
             Command::NewFolder => {
-                self.runtime.folder = self.creation_folder();
+                self.set_folder(self.creation_folder());
                 self.runtime.folder_name.clear();
                 self.runtime.folder_error = None;
                 self.runtime.reveal_until = None;
@@ -752,18 +802,22 @@ impl App {
             }
             Command::DeleteFolder => {
                 self.runtime.pending_folder_delete = self.delete_folder_target();
-                self.runtime.folder = self.runtime.pending_folder_delete;
+                self.set_folder(self.runtime.pending_folder_delete);
                 self.runtime.reveal_until = None;
                 self.clear_notice();
                 self.render.folder_dialog_visible.set(false);
                 self.runtime.mode = Mode::DeleteFolder;
             }
-            Command::OpenFolder | Command::MoveToFolder => {
+            Command::OpenFolder | Command::MoveToFolder | Command::MoveMarkedEntries => {
                 self.runtime.reveal_until = None;
                 self.clear_notice();
                 self.runtime.folder_selected = 0;
                 self.render.folder_dialog_visible.set(false);
-                self.runtime.mode = Mode::Folders(command == Command::MoveToFolder);
+                self.runtime.mode = match command {
+                    Command::MoveMarkedEntries => Mode::BulkMove,
+                    Command::MoveToFolder => Mode::Folders(true),
+                    _ => Mode::Folders(false),
+                };
             }
             Command::NewGeneratedEntry => {
                 self.edit(true);
@@ -777,6 +831,11 @@ impl App {
             Command::DeleteEntry => {
                 self.runtime.reveal_until = None;
                 self.runtime.mode = Mode::Delete;
+            }
+            Command::DeleteMarkedEntries => {
+                self.runtime.reveal_until = None;
+                self.clear_notice();
+                self.runtime.mode = Mode::BulkDelete;
             }
             Command::SaveEntry => {
                 self.save();
@@ -914,7 +973,30 @@ impl App {
             return;
         };
         let folder = *folder;
-        let preferred = if moving {
+        let preferred = if self.runtime.mode == Mode::BulkMove {
+            let Some(target) = folder else {
+                return;
+            };
+            let ids: Vec<_> = self.runtime.marked.iter().copied().collect();
+            let count = ids.len();
+            if count == 0 || self.browser_origin.is_some() || self.runtime.form.is_some() {
+                return;
+            }
+            let Some(session) = &mut self.runtime.session else {
+                return;
+            };
+            if let Err(error) = session.move_entries(&ids, target) {
+                self.runtime.mode = Mode::Browse;
+                self.error(error.to_string());
+                return;
+            }
+            self.info(localized!(
+                self.language,
+                "Entries moved: {count}",
+                "Перемещено записей: {count}"
+            ));
+            None
+        } else if moving {
             let Some(id) = self.selected_id() else {
                 return;
             };
@@ -941,6 +1023,32 @@ impl App {
         self.clear_search();
         self.runtime.mode = Mode::Browse;
         self.refresh(preferred);
+    }
+    fn confirm_bulk_delete(&mut self) {
+        if !self.render.bulk_delete_visible.get()
+            || self.browser_origin.is_some()
+            || self.runtime.form.is_some()
+            || self.runtime.marked.is_empty()
+        {
+            return;
+        }
+        let ids: Vec<_> = self.runtime.marked.iter().copied().collect();
+        let count = ids.len();
+        let Some(session) = &mut self.runtime.session else {
+            return;
+        };
+        self.runtime.mode = Mode::Browse;
+        match session.delete_entries(&ids) {
+            Ok(()) => {
+                self.refresh(None);
+                self.warning(localized!(
+                    self.language,
+                    "Entries deleted: {count}. Encrypted backup retained.",
+                    "Удалено записей: {count}. Зашифрованный бэкап сохранён."
+                ));
+            }
+            Err(error) => self.error(error.to_string()),
+        }
     }
     fn begin_sensitive(&mut self, kind: SensitiveKind) {
         self.runtime.reveal_until = None;
@@ -1221,7 +1329,8 @@ impl App {
                 }
                 return;
             }
-            Mode::Folders(moving) => {
+            Mode::Folders(_) | Mode::BulkMove => {
+                let moving = self.runtime.mode != Mode::Folders(false);
                 match key.code {
                     KeyCode::Esc => self.runtime.mode = Mode::Browse,
                     KeyCode::Up | KeyCode::BackTab => {
@@ -1232,7 +1341,24 @@ impl App {
                         self.runtime.folder_selected = (self.runtime.folder_selected + 1)
                             .min(self.folder_options(moving).len().saturating_sub(1))
                     }
-                    KeyCode::Enter => self.choose_folder(moving),
+                    KeyCode::Enter
+                        if self.runtime.mode != Mode::BulkMove
+                            || key.kind == KeyEventKind::Press =>
+                    {
+                        self.choose_folder(moving)
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            Mode::BulkDelete => {
+                match key.code {
+                    KeyCode::Esc => self.runtime.mode = Mode::Browse,
+                    KeyCode::Char('d' | 'в')
+                        if key.kind == KeyEventKind::Press && key.modifiers.is_empty() =>
+                    {
+                        self.confirm_bulk_delete()
+                    }
                     _ => {}
                 }
                 return;
@@ -1366,6 +1492,8 @@ impl App {
             | Mode::NewFolder
             | Mode::DeleteFolder
             | Mode::Folders(_)
+            | Mode::BulkMove
+            | Mode::BulkDelete
             | Mode::VaultDeleteConfirm
             | Mode::VaultDeleted
             | Mode::UpdateConsent
@@ -1431,13 +1559,23 @@ impl App {
                 }
             },
             Mode::Browse => match key.code {
+                KeyCode::Char('a' | 'A' | 'ф' | 'Ф') if ctrl && self.can_mark_entries() => {
+                    self.mark_all_displayed()
+                }
+                KeyCode::Char(' ')
+                    if key.kind == KeyEventKind::Press && key.modifiers.is_empty() =>
+                {
+                    if let Some(id) = self.selected_id().filter(|_| self.can_mark_entries()) {
+                        self.toggle_mark(id);
+                    } else if self.explorer_active() {
+                        self.explorer_right(true);
+                    }
+                }
                 KeyCode::Up if self.explorer_active() => self.move_explorer(-1),
                 KeyCode::Down if self.explorer_active() => self.move_explorer(1),
                 KeyCode::Right if self.explorer_active() => self.explorer_right(false),
                 KeyCode::Left if self.explorer_active() => self.explorer_left(),
-                KeyCode::Enter | KeyCode::Char(' ') if self.explorer_active() => {
-                    self.explorer_right(true)
-                }
+                KeyCode::Enter if self.explorer_active() => self.explorer_right(true),
                 KeyCode::Delete | KeyCode::Char('d') if self.delete_folder_target().is_some() => {
                     self.execute_shortcut(Command::DeleteFolder)
                 }
@@ -1452,9 +1590,13 @@ impl App {
                 }
                 KeyCode::Char('q') => self.execute_shortcut(Command::Quit),
                 KeyCode::Char('/') => self.execute_shortcut(Command::SearchEntries),
-                KeyCode::Esc => {
-                    self.clear_search();
-                    self.filter(None);
+                KeyCode::Esc if key.kind == KeyEventKind::Press => {
+                    if self.runtime.marked.is_empty() {
+                        self.clear_search();
+                        self.filter(None);
+                    } else {
+                        self.runtime.marked.clear();
+                    }
                     self.runtime.reveal_until = None;
                 }
                 KeyCode::Char('n') => self.execute_shortcut(Command::NewEntry),
@@ -2233,6 +2375,223 @@ mod tests {
         app.refresh(None);
         app.select_explorer(ExplorerNode::Folder(work));
         (root, app, work, mail, id)
+    }
+
+    #[test]
+    fn bulk_selection_moves_and_deletes_applied_search_results_with_one_backup_each() {
+        let (root, mut app, work, _, nested) = explorer_fixture();
+        let session = app.runtime.session.as_mut().unwrap();
+        let top = session
+            .update(
+                None,
+                &EntryData {
+                    title: Zeroizing::new("Other login".into()),
+                    url: Zeroizing::new("https://example.test".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let unrelated = session
+            .update(
+                None,
+                &EntryData {
+                    title: Zeroizing::new("Unrelated".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        app.refresh(None);
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let space = plain(KeyCode::Char(' '));
+        let enter = plain(KeyCode::Enter);
+        let esc = plain(KeyCode::Esc);
+        let files = || std::fs::read_dir(root.path()).unwrap().count();
+
+        app.key(ctrl('f'));
+        app.paste("ple.te");
+        app.key(ctrl('a'));
+        assert!(app.runtime.marked.is_empty());
+        assert_eq!(app.runtime.query.text(), "ple.te");
+        app.key(space);
+        assert_eq!(app.runtime.query.text(), "ple.te ");
+        app.key(plain(KeyCode::Backspace));
+        app.key(enter);
+        app.key(space);
+        assert_eq!(app.runtime.marked.len(), 1);
+        assert!(screen(&app).contains("Marked: 1"));
+        app.key(space);
+        assert!(app.runtime.marked.is_empty());
+        app.key(ctrl('ф'));
+        assert_eq!(app.runtime.marked, [top, nested].into_iter().collect());
+        app.key(ctrl('o'));
+        assert!(app.runtime.reveal_until.is_none());
+        assert!(!app.available_commands().contains(&Command::CopyPassword));
+        assert!(!app.available_commands().contains(&Command::ExportCsv));
+        app.key(esc);
+        assert!(app.runtime.marked.is_empty());
+        assert_eq!(app.runtime.query.text(), "ple.te");
+        app.key(ctrl('a'));
+
+        let before_move = files();
+        palette_command(&mut app, "move marked entries");
+        assert_eq!(app.runtime.mode, Mode::BulkMove);
+        assert!(screen(&app).contains("Move marked entries: 2"));
+        app.key(esc);
+        assert_eq!(app.runtime.marked.len(), 2);
+        assert_eq!(files(), before_move);
+        palette_command(&mut app, "move marked entries");
+        let _ = screen(&app);
+        app.key(plain(KeyCode::Down)); // Root, then Work.
+        app.key(enter);
+        assert_eq!(app.runtime.folder, Some(work));
+        assert!(app.runtime.marked.is_empty());
+        assert_eq!(files(), before_move + 1);
+        let session = app.runtime.session.as_ref().unwrap();
+        for id in [top, nested] {
+            assert_eq!(session.entry_folder(id), Some(work));
+        }
+
+        app.key(ctrl('f'));
+        app.paste("ple.te");
+        app.key(enter);
+        app.key(ctrl('a'));
+        app.language = Language::Russian;
+        assert!(screen(&app).contains("Отмечено: 2"));
+        let before_delete = files();
+        let previous_bytes = std::fs::read(&app.path).unwrap();
+        palette_command(&mut app, "delete marked entries");
+        assert_eq!(app.runtime.mode, Mode::BulkDelete);
+        app.key(plain(KeyCode::Char('в'))); // Not rendered yet.
+        assert_eq!(files(), before_delete);
+        assert!(screen(&app).contains("Будут удалены записи: 2"));
+        let _ = screen_rows(&app, 59, 19);
+        app.key(plain(KeyCode::Char('в'))); // Too small to review.
+        assert_eq!(files(), before_delete);
+        assert!(screen(&app).contains("Будут удалены записи: 2"));
+        app.key(enter);
+        assert_eq!(files(), before_delete);
+        app.key(esc);
+        assert_eq!(app.runtime.marked.len(), 2);
+        palette_command(&mut app, "delete marked entries");
+        let _ = screen(&app);
+        app.key(plain(KeyCode::Char('в')));
+        assert_eq!(files(), before_delete + 1);
+        assert!(app.runtime.marked.is_empty());
+        assert!(app.runtime.visible.is_empty());
+        let session = app.runtime.session.as_ref().unwrap();
+        assert!(session.entry(top).is_none() && session.entry(nested).is_none());
+        assert!(session.entry(unrelated).is_some());
+        let backup = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| *path != app.path && std::fs::read(path).unwrap() == previous_bytes)
+            .unwrap();
+        let prior = Session::unlock(&backup, "test master passphrase").unwrap();
+        assert_eq!(prior.entries().len(), 3);
+    }
+
+    #[test]
+    fn marks_only_include_displayed_entry_rows_and_reset_with_context() {
+        let (_root, mut app, work, mail, nested) = explorer_fixture();
+        let top = app
+            .runtime
+            .session
+            .as_mut()
+            .unwrap()
+            .update(
+                None,
+                &EntryData {
+                    title: Zeroizing::new("Top login".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        app.refresh(None);
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let space = plain(KeyCode::Char(' '));
+        assert!(!app.runtime.expanded_folders.contains(&work));
+        app.key(ctrl('a'));
+        assert_eq!(app.runtime.marked, [top].into_iter().collect());
+        app.key(space); // The focused folder expands; its row is never marked.
+        assert!(app.runtime.expanded_folders.contains(&work));
+        assert!(app.runtime.marked.is_empty());
+
+        app.key(plain(KeyCode::Char('/')));
+        app.paste("login");
+        app.key(plain(KeyCode::Enter));
+        app.key(ctrl('a'));
+        assert_eq!(app.runtime.marked, [top, nested].into_iter().collect());
+        app.key(ctrl('f')); // Changing scope resets marks.
+        assert!(app.runtime.marked.is_empty());
+        app.key(plain(KeyCode::Enter));
+        app.key(ctrl('a'));
+        app.key(ctrl('f'));
+        app.paste(" more"); // Editing the filter resets marks even within the same scope.
+        assert!(app.runtime.marked.is_empty());
+        app.key(plain(KeyCode::Esc));
+        app.key(ctrl('a'));
+        app.key(plain(KeyCode::Down)); // Moving the cursor does not change the list.
+        assert!(!app.runtime.marked.is_empty());
+        app.runtime.expanded_folders.insert(mail);
+        app.key(plain(KeyCode::Esc)); // Clear marks, then select two across folders.
+        app.select_explorer(ExplorerNode::Entry(top));
+        app.key(space);
+        app.select_explorer(ExplorerNode::Entry(nested));
+        assert!(app.runtime.marked.contains(&top));
+        app.key(space);
+        assert_eq!(app.runtime.marked, [top, nested].into_iter().collect());
+        app.key(ctrl('a'));
+        assert!(!app.runtime.marked.is_empty());
+        app.key(ctrl('l'));
+        assert!(app.runtime.marked.is_empty());
+        app.key(ctrl('a'));
+        assert!(app.runtime.marked.is_empty());
+        assert!(!app
+            .available_commands()
+            .contains(&Command::DeleteMarkedEntries));
+    }
+
+    #[test]
+    fn bulk_shortcuts_do_not_mark_browser_readonly_or_draft_entries() {
+        let (_root, mut app) = app();
+        app.runtime
+            .session
+            .as_mut()
+            .unwrap()
+            .update(
+                None,
+                &EntryData {
+                    title: Zeroizing::new("Entry".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        app.refresh(None);
+        let select_all = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        app.runtime.session.as_mut().unwrap().readonly = true;
+        app.key(space);
+        app.key(select_all);
+        assert!(app.runtime.marked.is_empty());
+        app.runtime.session.as_mut().unwrap().readonly = false;
+        app.browser_origin = Some("https://example.test".into());
+        app.key(space);
+        app.key(select_all);
+        assert!(app.runtime.marked.is_empty());
+        assert!(app.available_commands().is_empty());
+        app.browser_origin = None;
+        app.execute_shortcut(Command::EditEntry);
+        app.key(space);
+        app.key(select_all);
+        assert!(app.runtime.marked.is_empty());
+        assert!(app.runtime.form.as_ref().unwrap().fields[0]
+            .text()
+            .ends_with(' '));
+        assert!(!app
+            .available_commands()
+            .contains(&Command::MoveMarkedEntries));
     }
 
     #[test]

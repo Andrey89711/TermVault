@@ -20,6 +20,7 @@ pub(super) struct RenderFeedback {
     pub explorer_hits: RefCell<Vec<(Rect, ExplorerNode)>>,
     pub palette_hits: RefCell<Vec<(Rect, Command)>>,
     pub folder_dialog_visible: Cell<bool>,
+    pub bulk_delete_visible: Cell<bool>,
     pub browser_review_visible: Cell<bool>,
     pub palette_visible: Cell<bool>,
     pub sensitive_visible: Cell<bool>,
@@ -36,6 +37,7 @@ impl RenderFeedback {
         self.explorer_hits.borrow_mut().clear();
         self.palette_hits.borrow_mut().clear();
         self.folder_dialog_visible.set(false);
+        self.bulk_delete_visible.set(false);
         self.browser_review_visible.set(false);
         self.palette_visible.set(false);
         self.sensitive_visible.set(false);
@@ -136,6 +138,16 @@ impl App {
                 ),
                 base().fg(theme::WARNING),
             ));
+        } else if self.can_mark_entries() {
+            let count = self.runtime.marked.len();
+            header.push(Line::styled(
+                localized!(
+                    self.language,
+                    " Marked: {count} · Space mark · Ctrl+A all",
+                    " Отмечено: {count} · Пробел отметка · Ctrl+A все"
+                ),
+                base().fg(theme::SECONDARY),
+            ));
         }
         if self.runtime.session.is_some()
             || self.runtime.mode == Mode::VaultDeleted
@@ -212,7 +224,12 @@ impl App {
                     .iter()
                     .map(|i| {
                         let (id, title) = &self.runtime.entries[*i];
-                        ListItem::new(self.entry_label(*id, title))
+                        let label = self.entry_label(*id, title);
+                        ListItem::new(if self.runtime.marked.contains(id) {
+                            format!("[✓] {label}")
+                        } else {
+                            label
+                        })
                     })
                     .collect();
                 frame.render_stateful_widget(
@@ -238,11 +255,17 @@ impl App {
                     ),
                 );
             }
-            let data = (!field_search)
+            let marking = !self.runtime.marked.is_empty();
+            let data = (!field_search && !marking)
                 .then(|| self.selected_id())
                 .flatten()
                 .and_then(|id| self.runtime.session.as_ref()?.entry(id));
-            let text = if field_search {
+            let text = if marking {
+                vec![Line::from(self.tr(
+                    "Ctrl+P moves or deletes marked entries. Esc clears marks.",
+                    "Ctrl+P — переместить или удалить отмеченные записи. Esc — снять отметки.",
+                ))]
+            } else if field_search {
                 vec![Line::from(if self.runtime.visible.is_empty() {
                     self.tr("No matching entries.", "Нет подходящих записей.")
                 } else {
@@ -353,7 +376,9 @@ impl App {
             frame.render_widget(
                 Paragraph::new(text)
                     .block(
-                        panel(if field_search {
+                        panel(if marking {
+                            self.tr(" Marked entries ", " Отмеченные записи ")
+                        } else if field_search {
                             self.tr(" Search results ", " Результаты поиска ")
                         } else {
                             self.tr(
@@ -372,7 +397,7 @@ impl App {
                 self.tr(" Enter / Esc exit ", " Enter / Esc выход ")
             } else if self.runtime.mode == Mode::VaultAction {
                 self.tr(" Tab field · Enter continue · Esc cancel ", " Tab поле · Enter далее · Esc отмена ")
-            } else if matches!(self.runtime.mode, Mode::VaultDeleteConfirm | Mode::DeleteFolder) {
+            } else if matches!(self.runtime.mode, Mode::VaultDeleteConfirm | Mode::DeleteFolder | Mode::BulkDelete) {
                 self.tr(" d confirm deletion · Esc cancel ", " d подтвердить удаление · Esc отмена ")
             } else if matches!(self.runtime.mode, Mode::UpdateConsent | Mode::UpdateResult) {
                 self.tr(" Enter continue · Esc back ", " Enter далее · Esc назад ")
@@ -384,6 +409,10 @@ impl App {
                 self.tr(" ↑↓ select · Enter review · y approve in confirmation · Esc cancel ", " ↑↓ выбор · Enter проверить · y одобрить в диалоге · Esc отмена ")
             } else if self.runtime.form.is_some() {
                 self.tr(" Ctrl+P commands · Ctrl+O reveal · Tab field · Ctrl+S save · Esc back ", " Ctrl+P команды · Ctrl+O показать · Tab поле · Ctrl+S сохранить · Esc назад ")
+            } else if self.runtime.mode == Mode::Search && self.runtime.session.as_ref().is_some_and(|session| !session.readonly) {
+                self.tr(" Enter apply to mark results · Esc clear search ", " Enter применить для отметки записей · Esc сброс ")
+            } else if self.can_mark_entries() && !self.runtime.marked.is_empty() {
+                self.tr(" Ctrl+P actions · Esc clear marks · Ctrl+L lock ", " Ctrl+P действия · Esc снять отметки · Ctrl+L блокировка ")
             } else if self.field_search_active() {
                 self.tr(" Ctrl+F search · ↑↓ select · Enter · Esc clear ", " Ctrl+F поиск · ↑↓ выбор · Enter · Esc сброс ")
             } else if self.explorer_active() {
@@ -406,12 +435,22 @@ impl App {
                 self.render.install_visible.set(visible);
             }
             Mode::DeleteFolder => self.draw_folder_delete(frame),
+            Mode::BulkDelete => {
+                let count = self.runtime.marked.len();
+                let text = localized!(self.language,
+                    "Entries to delete: {count}\n\nAn encrypted backup will be kept. This is not secure erasure.\n\n[d] Delete marked entries · [Esc] Cancel",
+                    "Будут удалены записи: {count}\n\nЗашифрованный бэкап сохранится. Это не безопасное стирание.\n\n[d/в] Удалить отмеченные записи · [Esc] Отмена");
+                self.render.bulk_delete_visible.set(self.draw_full_consent(
+                    frame, &text, self.tr(" Confirm bulk deletion ", " Подтверждение группового удаления "),
+                ));
+            }
             Mode::NewFolder => {
                 let parent = if self.runtime.folder.is_some() { self.folder_label() } else { "/".into() };
                 popup(frame, &localized!(self.language, "Parent: {parent}\n\nFolder name:\n{}\n\nUp to 128 bytes, no / or \\.\n{}\n\nEnter create · Esc cancel", "Родитель: {parent}\n\nИмя папки:\n{}\n\nДо 128 байт, без / и \\.\n{}\n\nEnter создать · Esc отмена", self.runtime.folder_name.rendered(false, true), i18n::error(self.language, self.runtime.folder_error.as_deref().unwrap_or(""))), self.tr(" New folder ", " Новая папка "), 16);
                 self.render.folder_dialog_visible.set(true);
             }
             Mode::Folders(moving) => self.draw_folders(frame, moving),
+            Mode::BulkMove => self.draw_folders(frame, true),
             Mode::VaultAction => self.draw_sensitive(frame),
             Mode::VaultDeleteConfirm => self.draw_vault_delete_confirmation(frame),
             Mode::UpdateConsent => {
@@ -515,10 +554,18 @@ impl App {
         );
         dim_backdrop(frame);
         frame.render_widget(Clear, rect);
-        let block = panel(if moving {
+        let block = panel(&if self.runtime.mode == Mode::BulkMove {
+            let count = self.runtime.marked.len();
+            localized!(
+                self.language,
+                " Move marked entries: {count} ",
+                " Переместить отмеченные: {count} "
+            )
+        } else if moving {
             self.tr(" Move entry to folder ", " Переместить запись в папку ")
+                .into()
         } else {
-            self.tr(" Open folder ", " Открыть папку ")
+            self.tr(" Open folder ", " Открыть папку ").into()
         });
         let inner = block.inner(rect);
         frame.render_widget(block, rect);
@@ -1088,6 +1135,9 @@ impl App {
                         },
                         theme::MUTED,
                     ),
+                    ExplorerNode::Entry(id) if self.runtime.marked.contains(&id) => {
+                        ("[✓] ", theme::SECONDARY)
+                    }
                     ExplorerNode::Entry(_) => ("  · ", theme::MUTED),
                 };
                 ListItem::new(Line::from(vec![

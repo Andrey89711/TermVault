@@ -18,6 +18,8 @@ const PALETTE_ORDER: &[Command] = &[
     Command::NewFolder,
     Command::DeleteFolder,
     Command::MoveToFolder,
+    Command::MoveMarkedEntries,
+    Command::DeleteMarkedEntries,
     Command::ChangeMaster,
     Command::DeleteVault,
     Command::ImportCsv,
@@ -62,6 +64,7 @@ impl App {
             || matches!(
                 self.runtime.mode,
                 Mode::Delete
+                    | Mode::BulkDelete
                     | Mode::Discard(_)
                     | Mode::BrowserConfirm
                     | Mode::VaultAction
@@ -73,6 +76,7 @@ impl App {
                     | Mode::NewFolder
                     | Mode::DeleteFolder
                     | Mode::Folders(_)
+                    | Mode::BulkMove
             )
         {
             return false;
@@ -89,6 +93,7 @@ impl App {
         };
         let browsing = self.runtime.mode == Mode::Browse;
         let editing = self.runtime.mode == Mode::Edit && self.runtime.form.is_some();
+        let unmarked = self.runtime.marked.is_empty();
         match command {
             Command::InstallUpdate => {
                 browsing
@@ -101,10 +106,14 @@ impl App {
             Command::Back => editing || self.runtime.mode == Mode::Search,
             Command::SaveEntry | Command::GeneratePassword => editing && !session.readonly,
             Command::RevealPassword => {
-                editing || (browsing && !self.field_search_active() && self.selected_id().is_some())
+                editing
+                    || (browsing
+                        && unmarked
+                        && !self.field_search_active()
+                        && self.selected_id().is_some())
             }
             Command::CopyPassword | Command::CopyUsername => {
-                browsing && self.selected_id().is_some()
+                browsing && unmarked && self.selected_id().is_some()
             }
             Command::SearchEntries | Command::OpenFolder => browsing,
             Command::NewEntry
@@ -112,14 +121,18 @@ impl App {
             | Command::NewFolder
             | Command::ChangeMaster
             | Command::DeleteVault => browsing && !session.readonly,
-            Command::ImportCsv | Command::ExportCsv => {
-                browsing && !session.readonly && self.runtime.form.is_none()
+            Command::ImportCsv => browsing && !session.readonly && self.runtime.form.is_none(),
+            Command::ExportCsv => {
+                browsing && unmarked && !session.readonly && self.runtime.form.is_none()
             }
             Command::EditEntry | Command::DeleteEntry | Command::MoveToFolder => {
-                browsing && !session.readonly && self.selected_id().is_some()
+                browsing && unmarked && !session.readonly && self.selected_id().is_some()
             }
             Command::DeleteFolder => {
-                browsing && !session.readonly && self.delete_folder_target().is_some()
+                browsing && unmarked && !session.readonly && self.delete_folder_target().is_some()
+            }
+            Command::MoveMarkedEntries | Command::DeleteMarkedEntries => {
+                invocation == Invocation::Palette && self.can_mark_entries() && !unmarked
             }
         }
     }

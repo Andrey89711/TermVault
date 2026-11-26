@@ -39,8 +39,8 @@ credentials. Passwords remain masked in documentation screenshots.
 
 ## Build and run
 
-The current release is [v0.1.5](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.5):
-download `termvault-0.1.5-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
+The current release is [v0.1.6](https://github.com/Andrey89711/TermVault/releases/tag/v0.1.6):
+download `termvault-0.1.6-windows-x86_64.zip` and verify its SHA-256 against `SHA256SUMS.txt`.
 Extract the complete ZIP and run **`setup.cmd`**, not `setup.ps1` directly.
 The launcher applies `ExecutionPolicy Bypass` only to its child PowerShell process;
 it does not change your saved execution policy. Organization-managed policies may
@@ -129,6 +129,8 @@ reauthenticated action in the terminal UI, never a password-bearing CLI option.
 | ← / → | Collapse / expand folders; move to parent / first child |
 | `/` | Filter entry titles; Enter applies, Esc clears |
 | Ctrl+F | Search titles, usernames, URLs and notes; Enter applies, Esc clears |
+| Space / Ctrl+A | Toggle the focused entry's mark / mark all displayed entries |
+| Esc in Browse | Clear marks first; press again to clear the search |
 | `n` | New entry |
 | `g` | New entry with a generated 24-character password |
 | `f` | Open the folder picker (including All entries and `/`, the root) |
@@ -152,9 +154,9 @@ reauthenticated action in the terminal UI, never a password-bearing CLI option.
 | Esc in form | Return, confirming if unsaved |
 
 Paste using your terminal's paste action (often Ctrl+Shift+V). Bracketed paste is
-supported; multiline paste is accepted only in Notes. Ctrl+S/L/Q/G/P/O/F also recognize
-the corresponding standard Russian keyboard characters. Single-letter commands
-and confirmations currently use EN. The form does not have undo/redo.
+supported; multiline paste is accepted only in Notes. Ctrl+S/L/Q/G/P/O/F/A also recognize
+the corresponding standard Russian keyboard characters. Other single-letter commands
+and confirmations use EN unless indicated. The form does not have undo/redo.
 
 The palette supports ↑/↓ (or Tab/Shift+Tab), Enter or a click on a command to select,
 and Esc to cancel. Clicked commands are mapped directly to the displayed action.
@@ -165,6 +167,21 @@ Opening the palette hides any revealed password, and inactivity auto-lock closes
 No password is entered in the palette, no command history is saved and no shell
 commands are executed. The palette is unavailable in browser approval/confirmation
 dialogs and while a sensitive confirmation is open.
+
+### Selecting multiple entries
+
+In a writable desktop vault, press Space to toggle the focused entry's mark.
+Ctrl+A marks all results in the current list, including rows you can scroll to,
+but not entries hidden inside collapsed folders. For either search shortcut,
+press Enter to apply the query before marking results; Space still types a
+space while editing the query. Esc removes marks before clearing the search.
+Moving the cursor between expanded folders keeps marks. Marks reset when the
+filter, search scope or displayed tree changes, or when the vault locks.
+
+With entries marked, use Ctrl+P → **Move marked entries to folder** or
+**Delete marked entries**. Deletion shows the exact count and requires a separate
+`d` confirmation. Each batch uses one encrypted save and retains one encrypted
+backup of the previous vault. There are no bulk copy, reveal or export actions.
 
 ### Folders
 

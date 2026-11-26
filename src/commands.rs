@@ -13,6 +13,8 @@ pub enum Command {
     NewFolder,
     OpenFolder,
     MoveToFolder,
+    MoveMarkedEntries,
+    DeleteMarkedEntries,
     DeleteFolder,
     NewGeneratedEntry,
     EditEntry,
@@ -64,6 +66,13 @@ impl Command {
             }
             Self::MoveToFolder => {
                 language.text("Move entry to folder", "Переместить запись в папку")
+            }
+            Self::MoveMarkedEntries => language.text(
+                "Move marked entries to folder",
+                "Переместить отмеченные записи в папку",
+            ),
+            Self::DeleteMarkedEntries => {
+                language.text("Delete marked entries", "Удалить отмеченные записи")
             }
             Self::DeleteFolder => {
                 language.text("Delete selected folder", "Удалить выбранную папку")
@@ -131,6 +140,8 @@ impl Command {
             | Self::DeleteVault
             | Self::ImportCsv
             | Self::ExportCsv
+            | Self::MoveMarkedEntries
+            | Self::DeleteMarkedEntries
             | Self::InstallUpdate => "",
             Self::Lock => "Ctrl+L",
             Self::Quit => "Ctrl+Q",
@@ -144,6 +155,8 @@ impl Command {
             Self::NewFolder => "new create folder directory создать папку каталог",
             Self::OpenFolder => "open folders directory all открыть папки все записи",
             Self::MoveToFolder => "move entry folder переместить запись папка",
+            Self::MoveMarkedEntries => "bulk batch move marked selected entries групповое перемещение отмеченных записей",
+            Self::DeleteMarkedEntries => "bulk batch delete remove marked selected entries групповое удаление отмеченных записей",
             Self::DeleteFolder => {
                 "delete remove folder directory удалить папку удаление папки каталог"
             }
